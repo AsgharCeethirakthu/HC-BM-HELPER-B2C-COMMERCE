@@ -5,6 +5,7 @@ export type GapResult = {
   classification: string;
   confidence: number;
   rationale: string;
+  clarifying_questions?: string[] | null;
   top_chunks: Array<{
     text: string;
     metadata: Record<string, string | number | null>;
@@ -35,11 +36,38 @@ export type BaselineRemovedItem = {
   confidence?: number | null;
 };
 
+export type ConfluenceSpace = {
+  key: string;
+  name: string;
+};
+
+export type ConfluenceFolder = {
+  id: string;
+  title: string;
+};
+
 export async function analyzeRequirementsText(text: string, baselineName?: string) {
   const res = await fetch(`${API_BASE}/analyze`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ requirements_text: text, baseline_name: baselineName }),
+  });
+  if (!res.ok) {
+    throw new Error(await res.text());
+  }
+  return res.json() as Promise<{
+    total: number;
+    results: GapResult[];
+    baseline?: BaselineSummary | null;
+    baseline_removed?: BaselineRemovedItem[] | null;
+  }>;
+}
+
+export async function analyzeSingleRequirement(text: string) {
+  const res = await fetch(`${API_BASE}/analyze`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ requirements_list: [text] }),
   });
   if (!res.ok) {
     throw new Error(await res.text());
@@ -104,4 +132,54 @@ export async function generateFsdDocx(results: GapResult[]) {
     throw new Error(await res.text());
   }
   return res.blob();
+}
+
+export async function fetchConfluenceSpaces() {
+  const res = await fetch(`${API_BASE}/confluence/spaces`);
+  if (!res.ok) {
+    throw new Error(await res.text());
+  }
+  return res.json() as Promise<ConfluenceSpace[]>;
+}
+
+export async function fetchConfluenceFolders(spaceKey: string) {
+  const res = await fetch(`${API_BASE}/confluence/folders/${encodeURIComponent(spaceKey)}`);
+  if (!res.ok) {
+    throw new Error(await res.text());
+  }
+  return res.json() as Promise<ConfluenceFolder[]>;
+}
+
+export async function checkConfluenceDuplicate(spaceKey: string, parentId: string, title: string) {
+  const res = await fetch(`${API_BASE}/confluence/check-duplicate`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ space_key: spaceKey, parent_id: parentId, title }),
+  });
+  if (!res.ok) {
+    throw new Error(await res.text());
+  }
+  return res.json() as Promise<{ exists: boolean; page_id?: string | null }>;
+}
+
+export async function saveFsdToConfluence(
+  results: GapResult[],
+  spaceKey: string,
+  parentId: string,
+  title: string
+) {
+  const res = await fetch(`${API_BASE}/confluence/save-fsd`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      gap_results: results,
+      space_key: spaceKey,
+      parent_id: parentId,
+      title,
+    }),
+  });
+  if (!res.ok) {
+    throw new Error(await res.text());
+  }
+  return res.json() as Promise<{ page_id: string; title: string; url: string }>;
 }

@@ -3,318 +3,687 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
-  analyzeRequirementsFile,
+  ConfluenceFolder,
+  ConfluenceSpace,
+  GapResult,
   analyzeRequirementsText,
-  BaselineRemovedItem,
-  BaselineSummary,
+  analyzeSingleRequirement,
+  checkConfluenceDuplicate,
+  fetchConfluenceFolders,
+  fetchConfluenceSpaces,
   generateFsd,
   generateFsdDocx,
-  GapResult,
-  saveBaseline,
+  saveFsdToConfluence,
 } from "@/lib/api";
 
-const SAMPLE = `Checkout must support Apple Pay and gift messages.
-Add store locator with map view.
-Allow coupon stacking by customer group.
-Enable multi-ship to multiple addresses.`;
+type UploadState = "uploaded";
 
-const DEMO_RESULTS: GapResult[] = [
-  {
-    requirement: "Support coupon stacking by customer group.",
-    classification: "Partial match",
-    confidence: 0.35,
-    rationale:
-      "SFRA supports basic coupon stacking rules, but group-based constraints require custom logic.",
-    top_chunks: [
-      {
-        text: "Coupon redemptions can be configured with stackable rules. Group-based eligibility is not covered out-of-the-box.",
-        metadata: {
-          title: "SFRA Promotions Guide",
-          url: "https://docs.example.com/sfra/promotions",
-        },
-        score: 0.72,
-      },
-      {
-        text: "Customer group targeting is available via price books, but promotions require extension.",
-        metadata: {
-          title: "Promotion Targeting",
-          url: "https://docs.example.com/sfra/targeting",
-        },
-        score: 0.61,
-      },
-    ],
-    similarity_score: 0.42,
-    llm_confidence: 0.62,
-    llm_response: "Classified as partial: stack rules exist, group targeting requires customization.",
-  },
-  {
-    requirement: "Enable Apple Pay in checkout.",
-    classification: "OOTB match",
-    confidence: 0.82,
-    rationale: "Apple Pay is supported via built-in payment integrations and SFRA cartridges.",
-    top_chunks: [
-      {
-        text: "Apple Pay is supported through the SFRA payment integration pipeline.",
-        metadata: {
-          title: "SFRA Payments",
-          url: "https://docs.example.com/sfra/payments",
-        },
-        score: 0.83,
-      },
-    ],
-    similarity_score: 0.78,
-    llm_confidence: 0.86,
-    llm_response: "OOTB coverage confirmed by payments documentation.",
-  },
-  {
-    requirement: "Provide store locator with map view.",
-    classification: "Custom required",
-    confidence: 0.54,
-    rationale:
-      "SFRA includes store locator patterns, but no native map UI; custom frontend + map API needed.",
-    top_chunks: [
-      {
-        text: "Store locator API endpoints are provided; UI integration is implementation-specific.",
-        metadata: {
-          title: "Store Locator",
-          url: "https://docs.example.com/sfra/store-locator",
-        },
-        score: 0.59,
-      },
-    ],
-    similarity_score: 0.31,
-    llm_confidence: 0.58,
-    llm_response: "Custom UI required for map rendering.",
-  },
+type AttachmentMeta = {
+  id: string;
+  name: string;
+  size: number;
+  type: string;
+  uploadedAt: string;
+  uploadState: UploadState;
+};
+
+type FsdSidebarItem = {
+  id: string;
+  messageId: string;
+  response: string;
+  requirements: string[];
+  classifications: string[];
+};
+
+type FollowUpContext = {
+  baseRequirement: string;
+  qa: Array<{ question: string; answer: string }>;
+};
+
+type ChatMessage = {
+  id: string;
+  role: "user" | "assistant";
+  createdAt: string;
+  text: string;
+  attachments?: AttachmentMeta[];
+  analysisResults?: GapResult[];
+};
+
+type ChatThread = {
+  id: string;
+  title: string;
+  updatedAt: string;
+  messages: ChatMessage[];
+};
+
+const ANALYSIS_STEPS = [
+  "Analyzing scope",
+  "Mapping Baseline Requirements",
+  "Comparing Project FSD",
+  "Finalizing",
 ];
 
-const DEMO_FSD = `Scope Overview
-- Payment methods include Apple Pay via SFRA integration.
-- Store locator requires custom map UI integration.
-- Coupon stacking requires custom eligibility rules.
+const DOMAIN_HINTS = [
+  "checkout",
+  "payment",
+  "cart",
+  "homepage",
+  "home page",
+  "pdp",
+  "plp",
+  "product",
+  "recommendation",
+  "carousel",
+  "sfra",
+  "api",
+  "field",
+  "dropdown",
+  "validation",
+  "integration",
+  "promotion",
+  "shipping",
+  "address",
+  "profile",
+  "order",
+];
 
-Risks & Open Items
-- Map provider selection and API limits.
-- Promotion logic for customer group targeting.`;
+const looksVague = (text: string) => {
+  const normalized = text.toLowerCase().trim();
+  if (!normalized) return true;
+  const words = normalized.split(/\s+/).filter(Boolean);
+  if (words.length < 3) return true;
 
-export default function Home() {
-  const [text, setText] = useState(SAMPLE);
-  const [file, setFile] = useState<File | null>(null);
-  const [results, setResults] = useState<GapResult[]>([]);
-  const [fsd, setFsd] = useState("");
+  const vaguePatterns = [
+    /\b(add|do|create|update|change|fix|implement|improve)\b\s+(something|it|this|that|feature|page|stuff)\b/,
+    /\b(make it|do it|handle it)\b/,
+    /\b(add|update|change)\b$/,
+  ];
+  if (vaguePatterns.some((pattern) => pattern.test(normalized))) return true;
+
+  const hasDomainHint = DOMAIN_HINTS.some((hint) => normalized.includes(hint));
+  const hasLocationOrScope = /\b(in|on|for|within)\b/.test(normalized);
+  if (!hasDomainHint && !hasLocationOrScope && words.length < 6) return true;
+  return false;
+};
+
+const clarificationMessage = () =>
+  [
+    "I need a bit more context before running analysis.",
+    "Please clarify:",
+    "1. What exact feature or page should be changed?",
+    "2. What behavior should happen (and any validations/rules)?",
+    "3. Any data source, integration, or acceptance criteria?",
+  ].join("\n");
+
+const formatTime = (iso: string) =>
+  new Date(iso).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+
+const formatDateTime = (iso: string) =>
+  new Date(iso).toLocaleString([], {
+    month: "short",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+
+const firstMeaningfulLine = (text: string) => {
+  const line = text
+    .split("\n")
+    .map((part) => part.trim())
+    .find(Boolean);
+  return line || "New scope discussion";
+};
+
+const classifyTone = (label: string) => {
+  const normalized = label.toLowerCase();
+  if (normalized.includes("ootb")) return "bg-mint/20 text-mint";
+  if (normalized.includes("partial")) return "bg-amber/25 text-amber";
+  if (normalized.includes("open")) return "bg-rose/20 text-rose";
+  return "bg-signal/20 text-signal";
+};
+
+const statusCounts = (results: GapResult[]) => {
+  const counts = { total: results.length, ootb: 0, partial: 0, custom: 0, open: 0 };
+  for (const item of results) {
+    const label = item.classification.toLowerCase();
+    if (label.includes("ootb")) counts.ootb += 1;
+    else if (label.includes("partial")) counts.partial += 1;
+    else if (label.includes("open")) counts.open += 1;
+    else counts.custom += 1;
+  }
+  return counts;
+};
+
+const getSources = (item: GapResult) => {
+  const seen = new Set<string>();
+  const sources: Array<{ title: string; url: string }> = [];
+  for (const chunk of item.top_chunks || []) {
+    const url = typeof chunk.metadata?.url === "string" ? chunk.metadata.url : "";
+    if (!url || seen.has(url)) continue;
+    seen.add(url);
+    const title =
+      (typeof chunk.metadata?.title === "string" && chunk.metadata.title) ||
+      (typeof chunk.metadata?.source_id === "string" && chunk.metadata.source_id) ||
+      "Source page";
+    sources.push({ title, url });
+  }
+  return sources;
+};
+
+const createThread = (seed?: string): ChatThread => {
+  const now = new Date().toISOString();
+  const title = seed ? firstMeaningfulLine(seed).slice(0, 60) : "New scope discussion";
+  return {
+    id: crypto.randomUUID(),
+    title,
+    updatedAt: now,
+    messages: [
+      {
+        id: crypto.randomUUID(),
+        role: "assistant",
+        createdAt: now,
+        text: "Share your requirement scope. I will analyze SFRA coverage and highlight gaps.",
+      },
+    ],
+  };
+};
+
+export default function AnalyzerApp() {
+  const [threads, setThreads] = useState<ChatThread[]>([createThread()]);
+  const [activeThreadId, setActiveThreadId] = useState<string>(threads[0].id);
+  const [composer, setComposer] = useState("");
+  const [attachments, setAttachments] = useState<AttachmentMeta[]>([]);
   const [loading, setLoading] = useState(false);
-  const [loadingMode, setLoadingMode] = useState<
-    "analyze" | "generate" | "download" | "baseline" | null
-  >(null);
-  const [loadingMessage, setLoadingMessage] = useState("");
+  const [isChatAnalyzing, setIsChatAnalyzing] = useState(false);
+  const [analysisStepIndex, setAnalysisStepIndex] = useState(0);
   const [error, setError] = useState("");
-  const [showDebug, setShowDebug] = useState(false);
-  const [baselineName, setBaselineName] = useState("");
-  const [baselineSummary, setBaselineSummary] = useState<BaselineSummary | null>(null);
-  const [baselineRemoved, setBaselineRemoved] = useState<BaselineRemovedItem[]>([]);
-  const [baselineNotice, setBaselineNotice] = useState("");
-  const [search, setSearch] = useState("");
-  const [expandedWhy, setExpandedWhy] = useState<Set<number>>(new Set());
-  const [demoMode, setDemoMode] = useState(false);
-  const [compareText, setCompareText] = useState("");
-  const [diffSummary, setDiffSummary] = useState<{
-    added: string[];
-    removed: string[];
-    unchanged: string[];
-  } | null>(null);
   const [actionNotice, setActionNotice] = useState("");
-  const gapTableRef = useRef<HTMLDivElement | null>(null);
-  const fsdRef = useRef<HTMLDivElement | null>(null);
-  const exportRef = useRef<HTMLDivElement | null>(null);
+  const [isFsdPreviewOpen, setIsFsdPreviewOpen] = useState(false);
+  const [fsdPreview, setFsdPreview] = useState("");
+  const [fsdPreviewLoading, setFsdPreviewLoading] = useState(false);
+  const [fsdSelectionsByThread, setFsdSelectionsByThread] = useState<Record<string, FsdSidebarItem[]>>({});
+  const [addedMessageIdsByThread, setAddedMessageIdsByThread] = useState<Record<string, string[]>>({});
+
+  const [isHistoryCollapsed, setIsHistoryCollapsed] = useState(false);
+  const [isMobileHistoryOpen, setIsMobileHistoryOpen] = useState(false);
+  const [isMobileSummaryOpen, setIsMobileSummaryOpen] = useState(false);
+  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [isProfileOpen, setIsProfileOpen] = useState(false);
+  const [isHelpOpen, setIsHelpOpen] = useState(false);
+  const [isOnboardingOpen, setIsOnboardingOpen] = useState(true);
+  const [isConfluenceModalOpen, setIsConfluenceModalOpen] = useState(false);
+  const [confluenceLoading, setConfluenceLoading] = useState(false);
+  const [confluenceSpaces, setConfluenceSpaces] = useState<ConfluenceSpace[]>([]);
+  const [confluenceFolders, setConfluenceFolders] = useState<ConfluenceFolder[]>([]);
+  const [confluenceSpaceKey, setConfluenceSpaceKey] = useState("");
+  const [confluenceParentId, setConfluenceParentId] = useState("");
+  const [confluenceTitle, setConfluenceTitle] = useState("");
+  const [confluenceError, setConfluenceError] = useState("");
+  const [confluenceDuplicateWarning, setConfluenceDuplicateWarning] = useState("");
+  const [renamingThreadId, setRenamingThreadId] = useState<string | null>(null);
+  const [renameDraft, setRenameDraft] = useState("");
+  const [pendingDeleteThreadId, setPendingDeleteThreadId] = useState<string | null>(null);
+  const [deletingThreadId, setDeletingThreadId] = useState<string | null>(null);
+  const [introAnimationThreadId, setIntroAnimationThreadId] = useState<string | null>(null);
+  const [selectedFollowUpQuestion, setSelectedFollowUpQuestion] = useState<{
+    question: string;
+    baseRequirement: string;
+  } | null>(null);
+  const [followUpContextByThread, setFollowUpContextByThread] = useState<
+    Record<string, FollowUpContext>
+  >({});
+  const [recentlyAddedToSidebar, setRecentlyAddedToSidebar] = useState<{
+    threadId: string;
+    messageId: string;
+  } | null>(null);
+
+  const historyDrawerRef = useRef<HTMLDivElement | null>(null);
+  const summaryDrawerRef = useRef<HTMLDivElement | null>(null);
+  const settingsMenuRef = useRef<HTMLDivElement | null>(null);
+  const profileMenuRef = useRef<HTMLDivElement | null>(null);
+  const chatScrollRef = useRef<HTMLDivElement | null>(null);
+  const composerRef = useRef<HTMLTextAreaElement | null>(null);
+
+  const activeThread = useMemo(
+    () => threads.find((thread) => thread.id === activeThreadId) ?? threads[0],
+    [threads, activeThreadId]
+  );
+
+  const latestAnalysisResults = useMemo(() => {
+    const messages = activeThread?.messages || [];
+    for (let i = messages.length - 1; i >= 0; i -= 1) {
+      if (messages[i].analysisResults?.length) return messages[i].analysisResults || [];
+    }
+    return [] as GapResult[];
+  }, [activeThread]);
+
+  const activeFsdSelections = useMemo(
+    () => fsdSelectionsByThread[activeThreadId] || [],
+    [fsdSelectionsByThread, activeThreadId]
+  );
+  const activeAddedMessageIds = useMemo(
+    () => new Set(addedMessageIdsByThread[activeThreadId] || []),
+    [addedMessageIdsByThread, activeThreadId]
+  );
+  const fsdOutline = useMemo(() => {
+    const lines = fsdPreview
+      .split("\n")
+      .map((line) => line.trim())
+      .filter(Boolean);
+    return lines.slice(0, 8);
+  }, [fsdPreview]);
+
+  const closeOverlays = () => {
+    setIsMobileHistoryOpen(false);
+    setIsMobileSummaryOpen(false);
+    setIsProfileOpen(false);
+    setIsSettingsOpen(false);
+  };
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        closeOverlays();
+        setIsConfluenceModalOpen(false);
+        setIsOnboardingOpen(false);
+        setIsHelpOpen(false);
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, []);
+
+  useEffect(() => {
+    chatScrollRef.current?.scrollTo({ top: chatScrollRef.current.scrollHeight, behavior: "smooth" });
+  }, [activeThread?.messages]);
+
+  useEffect(() => {
+    if (!isChatAnalyzing) {
+      setAnalysisStepIndex(0);
+      return;
+    }
+    const interval = window.setInterval(() => {
+      setAnalysisStepIndex((prev) => {
+        if (prev >= ANALYSIS_STEPS.length - 1) return prev;
+        return prev + 1;
+      });
+    }, 1400);
+    return () => window.clearInterval(interval);
+  }, [isChatAnalyzing]);
+
+  useEffect(() => {
+    const onClickOutside = (event: MouseEvent) => {
+      const target = event.target as Node;
+      if (settingsMenuRef.current && !settingsMenuRef.current.contains(target)) {
+        setIsSettingsOpen(false);
+      }
+      if (profileMenuRef.current && !profileMenuRef.current.contains(target)) {
+        setIsProfileOpen(false);
+      }
+    };
+
+    document.addEventListener("mousedown", onClickOutside);
+    return () => document.removeEventListener("mousedown", onClickOutside);
+  }, []);
+
+  useEffect(() => {
+    const trapFocus = (container: HTMLDivElement | null, active: boolean) => {
+      if (!container || !active) return;
+      const focusable = container.querySelectorAll<HTMLElement>(
+        'button, [href], input, textarea, [tabindex]:not([tabindex="-1"])'
+      );
+      if (!focusable.length) return;
+      focusable[0].focus();
+
+      const onKeyDown = (event: KeyboardEvent) => {
+        if (event.key !== "Tab") return;
+        const first = focusable[0];
+        const last = focusable[focusable.length - 1];
+        if (event.shiftKey && document.activeElement === first) {
+          event.preventDefault();
+          last.focus();
+        } else if (!event.shiftKey && document.activeElement === last) {
+          event.preventDefault();
+          first.focus();
+        }
+      };
+
+      container.addEventListener("keydown", onKeyDown);
+      return () => container.removeEventListener("keydown", onKeyDown);
+    };
+
+    const cleanupHistory = trapFocus(historyDrawerRef.current, isMobileHistoryOpen);
+    const cleanupSummary = trapFocus(summaryDrawerRef.current, isMobileSummaryOpen);
+
+    return () => {
+      cleanupHistory?.();
+      cleanupSummary?.();
+    };
+  }, [isMobileHistoryOpen, isMobileSummaryOpen]);
 
   const handleSignOut = async () => {
     await fetch("/api/gate/logout", { method: "POST" });
     window.location.href = "/gate";
   };
 
-  useEffect(() => {
-    if (!loadingMode) {
-      setLoadingMessage("");
+  const startNewThread = () => {
+    const thread = createThread();
+    setThreads((prev) => [thread, ...prev]);
+    setActiveThreadId(thread.id);
+    setIntroAnimationThreadId(thread.id);
+    setComposer("");
+    setAttachments([]);
+    setError("");
+    closeOverlays();
+    window.setTimeout(() => {
+      setIntroAnimationThreadId((current) => (current === thread.id ? null : current));
+    }, 950);
+  };
+
+  const handleRenameThread = (threadId: string) => {
+    const current = threads.find((thread) => thread.id === threadId);
+    if (!current) return;
+    setRenamingThreadId(threadId);
+    setRenameDraft(current.title);
+  };
+
+  const handleSaveThreadRename = (threadId: string) => {
+    const cleaned = renameDraft.trim();
+    if (!cleaned) return;
+    setThreads((prev) =>
+      prev.map((thread) =>
+        thread.id === threadId
+          ? { ...thread, title: cleaned.slice(0, 80), updatedAt: new Date().toISOString() }
+          : thread
+      )
+    );
+    setRenamingThreadId(null);
+    setRenameDraft("");
+  };
+
+  const removeThread = (threadId: string) => {
+    setThreads((prev) => {
+      const remaining = prev.filter((thread) => thread.id !== threadId);
+      if (remaining.length === 0) {
+        const replacement = createThread();
+        setActiveThreadId(replacement.id);
+        return [replacement];
+      }
+      if (activeThreadId === threadId) {
+        setActiveThreadId(remaining[0].id);
+      }
+      return remaining;
+    });
+  };
+
+  const handleDeleteThread = (threadId: string) => {
+    setPendingDeleteThreadId(threadId);
+    if (renamingThreadId === threadId) {
+      setRenamingThreadId(null);
+      setRenameDraft("");
+    }
+    if (activeThreadId === threadId) {
+      setSelectedFollowUpQuestion(null);
+    }
+  };
+
+  const handleConfirmDeleteThread = (threadId: string) => {
+    setPendingDeleteThreadId(null);
+    setDeletingThreadId(threadId);
+    window.setTimeout(() => {
+      removeThread(threadId);
+      setFsdSelectionsByThread((prev) => {
+        const next = { ...prev };
+        delete next[threadId];
+        return next;
+      });
+      setFollowUpContextByThread((prev) => {
+        const next = { ...prev };
+        delete next[threadId];
+        return next;
+      });
+      setAddedMessageIdsByThread((prev) => {
+        const next = { ...prev };
+        delete next[threadId];
+        return next;
+      });
+      setDeletingThreadId((current) => (current === threadId ? null : current));
+    }, 650);
+  };
+
+  const handleAddToFsd = (message: ChatMessage) => {
+    if (!activeThread) return;
+    if (activeAddedMessageIds.has(message.id)) return;
+
+    const uptoIndex = activeThread.messages.findIndex((msg) => msg.id === message.id);
+    const consideredMessages =
+      uptoIndex >= 0 ? activeThread.messages.slice(0, uptoIndex + 1) : activeThread.messages;
+    const allAnalyzed = consideredMessages.flatMap((msg) => msg.analysisResults || []);
+    const uniqueRequirements = Array.from(new Set(allAnalyzed.map((item) => item.requirement).filter(Boolean)));
+    const uniqueClassifications = Array.from(
+      new Set(allAnalyzed.map((item) => item.classification).filter(Boolean))
+    );
+    const consolidatedRationale = allAnalyzed
+      .map((item) => item.rationale?.trim())
+      .filter(Boolean)
+      .join(" ");
+    const userContext = consideredMessages
+      .filter((msg) => msg.role === "user")
+      .map((msg) => msg.text.trim())
+      .filter(Boolean)
+      .join(" ");
+    const analysisText = [userContext ? `Context discussed: ${userContext}` : "", consolidatedRationale]
+      .filter(Boolean)
+      .join("\n\n")
+      .trim();
+
+    const newItem: FsdSidebarItem = {
+      id: `fsd-${message.id}`,
+      messageId: message.id,
+      response: analysisText || message.text,
+      requirements: uniqueRequirements,
+      classifications: uniqueClassifications,
+    };
+
+    setFsdSelectionsByThread((prev) => {
+      const current = prev[activeThread.id] || [];
+      const exists = current.some((item) => item.messageId === message.id);
+      if (exists) return prev;
+      return { ...prev, [activeThread.id]: [...current, newItem] };
+    });
+
+    setAddedMessageIdsByThread((prev) => {
+      const current = prev[activeThread.id] || [];
+      return { ...prev, [activeThread.id]: [...current, message.id] };
+    });
+    setRecentlyAddedToSidebar({ threadId: activeThread.id, messageId: message.id });
+    window.setTimeout(() => {
+      setRecentlyAddedToSidebar((current) =>
+        current?.threadId === activeThread.id && current?.messageId === message.id ? null : current
+      );
+    }, 2800);
+  };
+
+  const handleRemoveFromFsd = (itemId: string, messageId: string) => {
+    if (!activeThread) return;
+    setFsdSelectionsByThread((prev) => {
+      const current = prev[activeThread.id] || [];
+      return { ...prev, [activeThread.id]: current.filter((item) => item.id !== itemId) };
+    });
+    setAddedMessageIdsByThread((prev) => {
+      const current = prev[activeThread.id] || [];
+      return { ...prev, [activeThread.id]: current.filter((id) => id !== messageId) };
+    });
+  };
+
+  const setThreadMessages = (threadId: string, updater: (messages: ChatMessage[]) => ChatMessage[]) => {
+    setThreads((prev) =>
+      prev.map((thread) => {
+        if (thread.id !== threadId) return thread;
+        const nextMessages = updater(thread.messages);
+        return { ...thread, messages: nextMessages, updatedAt: new Date().toISOString() };
+      })
+    );
+  };
+
+  const handleAttachFiles = (files: FileList | null) => {
+    if (!files?.length) return;
+    const now = new Date().toISOString();
+    const incoming = Array.from(files).map((file) => ({
+      id: crypto.randomUUID(),
+      name: file.name,
+      size: file.size,
+      type: file.type || "application/octet-stream",
+      uploadedAt: now,
+      uploadState: "uploaded" as const,
+    }));
+    setAttachments((prev) => [...prev, ...incoming]);
+  };
+
+  const removeAttachment = (id: string) => {
+    setAttachments((prev) => prev.filter((item) => item.id !== id));
+  };
+
+  const submitDiscussion = async (
+    scopeTextInput: string,
+    messageAttachments: AttachmentMeta[],
+    forceAnalyze = false,
+    singleRequirementMode = false,
+    analysisTextOverride?: string
+  ) => {
+    if (!activeThread) return;
+    const scopeText = scopeTextInput.trim();
+    const analysisText = (analysisTextOverride ?? scopeTextInput).trim();
+    if (!scopeText && messageAttachments.length === 0) return;
+
+    setError("");
+    setActionNotice("");
+
+    const now = new Date().toISOString();
+    const userMessage: ChatMessage = {
+      id: crypto.randomUUID(),
+      role: "user",
+      createdAt: now,
+      text: scopeText || "Uploaded context files",
+      attachments: messageAttachments.length ? messageAttachments : undefined,
+    };
+
+    setThreadMessages(activeThread.id, (messages) => [...messages, userMessage]);
+
+    if (activeThread.messages.length <= 1 && scopeText) {
+      setThreads((prev) =>
+        prev.map((thread) =>
+          thread.id === activeThread.id
+            ? { ...thread, title: firstMeaningfulLine(scopeText).slice(0, 60), updatedAt: now }
+            : thread
+        )
+      );
+    }
+
+    if (!forceAnalyze && (!analysisText || looksVague(analysisText))) {
+      const followUpMessage: ChatMessage = {
+        id: crypto.randomUUID(),
+        role: "assistant",
+        createdAt: new Date().toISOString(),
+        text: clarificationMessage(),
+      };
+      setThreadMessages(activeThread.id, (messages) => [...messages, followUpMessage]);
       return;
     }
 
-    const stepsByMode: Record<NonNullable<typeof loadingMode>, string[]> = {
-      analyze: [
-        "Analyzing requirements",
-        "Fetching evidence sources",
-        "Comparing SFRA coverage",
-        "Scoring confidence signals",
-      ],
-      generate: ["Drafting FSD summary", "Mapping gaps to deliverables", "Formatting exec output"],
-      download: ["Preparing .docx", "Packaging sources", "Finalizing download"],
-      baseline: ["Saving baseline snapshot", "Scoring OOTB coverage", "Indexing baseline state"],
-    };
-
-    const steps = stepsByMode[loadingMode];
-    let idx = 0;
-    setLoadingMessage(steps[idx]);
-    const interval = window.setInterval(() => {
-      idx = (idx + 1) % steps.length;
-      setLoadingMessage(steps[idx]);
-    }, 1400);
-
-    return () => window.clearInterval(interval);
-  }, [loadingMode]);
-
-  const summary = useMemo(() => {
-    const counts = {
-      total: results.length,
-      oob: 0,
-      partial: 0,
-      custom: 0,
-      open: 0,
-    };
-    for (const item of results) {
-      const label = item.classification.toLowerCase();
-      if (label.includes("ootb")) counts.oob += 1;
-      else if (label.includes("partial")) counts.partial += 1;
-      else if (label.includes("open")) counts.open += 1;
-      else counts.custom += 1;
-    }
-    return counts;
-  }, [results]);
-
-  const badgeTone = (label: string) => {
-    const normalized = label.toLowerCase();
-    if (normalized.includes("ootb")) return "bg-mint/20 text-mint";
-    if (normalized.includes("partial")) return "bg-amber/25 text-amber";
-    if (normalized.includes("open")) return "bg-rose/20 text-rose";
-    return "bg-signal/20 text-signal";
-  };
-
-  const baselineTone = (label: string) => {
-    const normalized = label.toLowerCase();
-    if (normalized === "unchanged") return "bg-mint/20 text-mint";
-    if (normalized === "changed") return "bg-amber/25 text-amber";
-    if (normalized === "new") return "bg-signal/20 text-signal";
-    return "bg-obsidian/5 text-obsidian/60";
-  };
-
-  const getSources = (item: GapResult) => {
-    const seen = new Set<string>();
-    const sources: Array<{ title: string; url: string }> = [];
-    for (const chunk of item.top_chunks) {
-      const url = typeof chunk.metadata?.url === "string" ? chunk.metadata.url : "";
-      if (!url || seen.has(url)) continue;
-      seen.add(url);
-      const title =
-        (typeof chunk.metadata?.title === "string" && chunk.metadata.title) ||
-        (typeof chunk.metadata?.source_id === "string" && chunk.metadata.source_id) ||
-        "Source page";
-      sources.push({ title, url });
-    }
-    return sources;
-  };
-
-  const handleAnalyze = async () => {
     setLoading(true);
-    setLoadingMode("analyze");
-    setError("");
-    setBaselineNotice("");
+    setIsChatAnalyzing(true);
+
     try {
-      const payload = file
-        ? await analyzeRequirementsFile(file)
-        : await analyzeRequirementsText(text, baselineName || undefined);
-      setResults(payload.results);
-      if ("baseline" in payload) {
-        setBaselineSummary(payload.baseline ?? null);
-        setBaselineRemoved(payload.baseline_removed ?? []);
-      } else {
-        setBaselineSummary(null);
-        setBaselineRemoved([]);
-      }
-      setFsd("");
+      const payload = singleRequirementMode
+        ? await analyzeSingleRequirement(analysisText)
+        : await analyzeRequirementsText(analysisText);
+      const counts = statusCounts(payload.results);
+      const summaryText = `Analyzed ${counts.total} requirements: ${counts.ootb} OOTB, ${counts.partial} partial, ${counts.custom} custom, ${counts.open} open.`;
+
+      const assistantMessage: ChatMessage = {
+        id: crypto.randomUUID(),
+        role: "assistant",
+        createdAt: new Date().toISOString(),
+        text: summaryText,
+        analysisResults: payload.results,
+      };
+
+      setThreadMessages(activeThread.id, (messages) => [...messages, assistantMessage]);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Something went wrong.");
-    } finally {
-      setLoading(false);
-      setLoadingMode(null);
-    }
-  };
-
-  const handleScopeDiff = async () => {
-    setLoading(true);
-    setLoadingMode("analyze");
-    setError("");
-    try {
-      const [current, compare] = await Promise.all([
-        analyzeRequirementsText(text),
-        analyzeRequirementsText(compareText),
+      const message = err instanceof Error ? err.message : "Something went wrong.";
+      setError(message);
+      setThreadMessages(activeThread.id, (messages) => [
+        ...messages,
+        {
+          id: crypto.randomUUID(),
+          role: "assistant",
+          createdAt: new Date().toISOString(),
+          text: `I could not run analysis: ${message}`,
+        },
       ]);
-      const currentSet = new Set(current.results.map((item) => item.requirement.toLowerCase()));
-      const compareSet = new Set(compare.results.map((item) => item.requirement.toLowerCase()));
-      const added: string[] = [];
-      const removed: string[] = [];
-      const unchanged: string[] = [];
-      for (const req of currentSet) {
-        if (compareSet.has(req)) unchanged.push(req);
-        else added.push(req);
-      }
-      for (const req of compareSet) {
-        if (!currentSet.has(req)) removed.push(req);
-      }
-      setDiffSummary({ added, removed, unchanged });
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Something went wrong.");
     } finally {
       setLoading(false);
-      setLoadingMode(null);
+      setIsChatAnalyzing(false);
     }
   };
 
-  const handleGenerate = async () => {
-    if (results.length === 0) {
-      setError("Run analysis or load the demo case before generating the FSD.");
+  const handleSend = async () => {
+    const messageAttachments = attachments;
+    const typedAnswer = composer.trim();
+
+    if (selectedFollowUpQuestion) {
+      if (!typedAnswer) {
+        setError("Add your response to the selected follow-up question before sending.");
+        return;
+      }
+      if (!activeThread) return;
+      const existing = followUpContextByThread[activeThread.id];
+      const baseRequirement =
+        existing?.baseRequirement || selectedFollowUpQuestion.baseRequirement || "Requirement context";
+      const nextQa = [...(existing?.qa || []), { question: selectedFollowUpQuestion.question, answer: typedAnswer }];
+      const combinedContext = [
+        `Requirement context: ${baseRequirement}`,
+        ...nextQa.map((item, idx) => `Q${idx + 1}: ${item.question}\nA${idx + 1}: ${item.answer}`),
+        "Using all context above, provide a consolidated analysis response.",
+      ].join("\n\n");
+      const displayText = `Reply to follow-up: ${selectedFollowUpQuestion.question}\n${typedAnswer}`;
+
+      setFollowUpContextByThread((prev) => ({
+        ...prev,
+        [activeThread.id]: { baseRequirement, qa: nextQa },
+      }));
+      setComposer("");
+      setAttachments([]);
+      setSelectedFollowUpQuestion(null);
+      await submitDiscussion(displayText, messageAttachments, true, true, combinedContext);
       return;
     }
-    setLoading(true);
-    setLoadingMode("generate");
+
+    const scopeText = composer;
+    setComposer("");
+    setAttachments([]);
+    await submitDiscussion(scopeText, messageAttachments);
+  };
+
+  const handleFollowUpQuestionSelect = (question: string, baseRequirement: string) => {
+    setSelectedFollowUpQuestion({ question, baseRequirement });
     setError("");
-    setActionNotice("");
-    setBaselineNotice("");
-    try {
-      const payload = await generateFsd(results);
-      setFsd(payload.fsd);
-      setActionNotice("FSD draft generated.");
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Something went wrong.");
-    } finally {
-      setLoading(false);
-      setLoadingMode(null);
-    }
+    window.setTimeout(() => composerRef.current?.focus(), 0);
   };
 
-  const runGuidedDemo = () => {
-    setDemoMode(true);
-    setText(SAMPLE);
-    setFile(null);
-    setResults(DEMO_RESULTS);
-    setFsd(DEMO_FSD);
-    setBaselineSummary(null);
-    setBaselineRemoved([]);
-    setActionNotice("Demo loaded. Follow the steps below.");
-    window.setTimeout(() => gapTableRef.current?.scrollIntoView({ behavior: "smooth" }), 600);
-    window.setTimeout(() => fsdRef.current?.scrollIntoView({ behavior: "smooth" }), 1800);
-    window.setTimeout(() => exportRef.current?.scrollIntoView({ behavior: "smooth" }), 2800);
-  };
-
-  const handleDownloadDocx = async () => {
-    if (results.length === 0) {
-      setError("Run analysis or load the demo case before downloading the FSD.");
+  const handleExportDocx = async () => {
+    if (!latestAnalysisResults.length) {
+      setError("Analyze scope in chat before exporting FSD.");
       return;
     }
+
     setLoading(true);
-    setLoadingMode("download");
     setError("");
     setActionNotice("");
-    setBaselineNotice("");
+
     try {
-      const blob = await generateFsdDocx(results);
+      const blob = await generateFsdDocx(latestAnalysisResults);
       const url = URL.createObjectURL(blob);
       const link = document.createElement("a");
       link.href = url;
@@ -328,728 +697,940 @@ export default function Home() {
       setError(err instanceof Error ? err.message : "Something went wrong.");
     } finally {
       setLoading(false);
-      setLoadingMode(null);
     }
   };
 
-  const handleSaveBaseline = async () => {
-    if (!baselineName.trim()) {
-      setBaselineNotice("Add a baseline name before saving.");
+  const handleOpenFsdPreview = async () => {
+    if (!latestAnalysisResults.length) {
+      setError("Analyze scope in chat before previewing FSD.");
       return;
     }
-    setLoading(true);
-    setLoadingMode("baseline");
+
+    setFsdPreviewLoading(true);
     setError("");
+    setActionNotice("");
     try {
-      const saved = await saveBaseline(baselineName.trim(), text);
-      setBaselineNotice(`Baseline "${saved.name}" saved with ${saved.total} requirements.`);
+      const payload = await generateFsd(latestAnalysisResults);
+      setFsdPreview(payload.fsd || "");
+      setIsFsdPreviewOpen(true);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Something went wrong.");
+      setError(err instanceof Error ? err.message : "Unable to generate FSD preview.");
     } finally {
-      setLoading(false);
-      setLoadingMode(null);
+      setFsdPreviewLoading(false);
     }
   };
 
-  const filteredResults = results.filter((item) =>
-    item.requirement.toLowerCase().includes(search.toLowerCase())
-  );
-
-  const exportTraceabilityCsv = () => {
-    const rows = [
-      ["Requirement", "Classification", "Confidence", "Evidence Title", "Evidence URL"].join(","),
-    ];
-    for (const item of results) {
-      const sources = getSources(item);
-      if (!sources.length) {
-        rows.push(
-          [
-            `"${item.requirement.replaceAll('"', '""')}"`,
-            `"${item.classification.replaceAll('"', '""')}"`,
-            (item.confidence * 100).toFixed(0),
-            "",
-            "",
-          ].join(",")
-        );
-        continue;
-      }
-      for (const source of sources) {
-        rows.push(
-          [
-            `"${item.requirement.replaceAll('"', '""')}"`,
-            `"${item.classification.replaceAll('"', '""')}"`,
-            (item.confidence * 100).toFixed(0),
-            `"${source.title.replaceAll('"', '""')}"`,
-            `"${source.url.replaceAll('"', '""')}"`,
-          ].join(",")
-        );
-      }
+  const openConfluenceModal = async () => {
+    if (!latestAnalysisResults.length) {
+      setError("Analyze scope in chat before saving to Confluence.");
+      return;
     }
-    const blob = new Blob([rows.join("\n")], { type: "text/csv;charset=utf-8;" });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement("a");
-    link.href = url;
-    link.download = "traceability-matrix.csv";
-    document.body.appendChild(link);
-    link.click();
-    link.remove();
-    URL.revokeObjectURL(url);
+    const defaultTitle = `${activeThread?.title || "FSD"} - ${new Date().toISOString().slice(0, 10)}`;
+    setConfluenceTitle(defaultTitle);
+    setConfluenceError("");
+    setConfluenceDuplicateWarning("");
+    setIsConfluenceModalOpen(true);
+    setConfluenceLoading(true);
+    try {
+      const spaces = await fetchConfluenceSpaces();
+      setConfluenceSpaces(spaces);
+      if (spaces.length) {
+        const initialSpace = spaces[0].key;
+        setConfluenceSpaceKey(initialSpace);
+        const folders = await fetchConfluenceFolders(initialSpace);
+        setConfluenceFolders(folders);
+        setConfluenceParentId(folders[0]?.id || "");
+      } else {
+        setConfluenceSpaceKey("");
+        setConfluenceFolders([]);
+        setConfluenceParentId("");
+      }
+    } catch (err) {
+      setConfluenceError(err instanceof Error ? err.message : "Unable to load Confluence metadata.");
+    } finally {
+      setConfluenceLoading(false);
+    }
+  };
+
+  const handleSpaceChange = async (nextSpace: string) => {
+    setConfluenceSpaceKey(nextSpace);
+    setConfluenceParentId("");
+    setConfluenceFolders([]);
+    setConfluenceDuplicateWarning("");
+    if (!nextSpace) return;
+
+    setConfluenceLoading(true);
+    setConfluenceError("");
+    try {
+      const folders = await fetchConfluenceFolders(nextSpace);
+      setConfluenceFolders(folders);
+      setConfluenceParentId(folders[0]?.id || "");
+    } catch (err) {
+      setConfluenceError(err instanceof Error ? err.message : "Unable to load folders.");
+    } finally {
+      setConfluenceLoading(false);
+    }
+  };
+
+  const handleConfluenceSave = async () => {
+    const spaceKey = confluenceSpaceKey.trim();
+    const parentId = confluenceParentId.trim();
+    const title = confluenceTitle.trim();
+
+    if (!spaceKey || !parentId || !title) {
+      setConfluenceError("Space, folder, and filename are required.");
+      return;
+    }
+    if (!latestAnalysisResults.length) {
+      setConfluenceError("No analysis found to save.");
+      return;
+    }
+
+    setConfluenceLoading(true);
+    setConfluenceError("");
+    setConfluenceDuplicateWarning("");
+    setActionNotice("");
+
+    try {
+      const dup = await checkConfluenceDuplicate(spaceKey, parentId, title);
+      if (dup.exists) {
+        setConfluenceDuplicateWarning(
+          "A page with this filename already exists in the selected folder. Choose a different filename."
+        );
+        return;
+      }
+
+      const saved = await saveFsdToConfluence(latestAnalysisResults, spaceKey, parentId, title);
+      setActionNotice(`Saved to Confluence: ${saved.title}`);
+      setIsConfluenceModalOpen(false);
+    } catch (err) {
+      setConfluenceError(err instanceof Error ? err.message : "Unable to save to Confluence.");
+    } finally {
+      setConfluenceLoading(false);
+    }
   };
 
   return (
-    <main className="app-shell min-h-screen px-4 py-8 text-obsidian sm:px-6">
-      <section className="mx-auto flex max-w-7xl flex-col gap-6">
-        <header className="glass-bar flex-col items-start gap-4 sm:flex-row sm:items-center sm:gap-4">
-          <div className="flex items-center gap-3">
-            <div className="h-10 w-10 rounded-2xl bg-gradient-to-br from-signal to-mint" />
-            <div>
-              <p className="text-sm font-semibold text-obsidian/70">SFRA AI Agent</p>
-              <p className="text-lg font-semibold">Requirements Intelligence</p>
-            </div>
+    <main className="workspace-shell min-h-screen text-obsidian">
+      <header className="top-nav glass-bar" role="navigation" aria-label="Main navigation">
+        <div className="flex items-center gap-3">
+          <button
+            className="icon-chip lg:hidden"
+            onClick={() => setIsMobileHistoryOpen(true)}
+            aria-label="Open chat history"
+          >
+            ?
+          </button>
+          <div className="h-10 w-10 rounded-2xl bg-gradient-to-br from-signal to-mint" />
+          <div>
+            <p className="text-sm font-semibold text-obsidian/70">SFRA AI Agent</p>
+            <p className="text-lg font-semibold">Requirements Intelligence</p>
           </div>
-          <nav className="hidden items-center gap-6 text-sm font-semibold text-obsidian/60 lg:flex">
-            <button className="nav-pill">Upload</button>
-            <button className="nav-pill nav-pill--active">Analysis</button>
-            <button className="nav-pill">FSD Preview</button>
-            <button className="nav-pill">Export</button>
-          </nav>
-          <div className="flex w-full items-center gap-2 sm:w-auto">
+        </div>
+
+        <div className="flex items-center gap-2">
+          <button
+            className="rounded-full px-2 py-1 text-xs font-semibold text-obsidian/65 underline decoration-obsidian/35 underline-offset-2 hover:text-obsidian"
+            onClick={() => {
+              setIsHelpOpen(true);
+              setIsSettingsOpen(false);
+              setIsProfileOpen(false);
+            }}
+          >
+            Help
+          </button>
+
+          <div className="relative" ref={settingsMenuRef}>
             <button
-              onClick={handleSignOut}
-              className="rounded-full border border-obsidian/10 px-3 py-1 text-xs font-semibold text-obsidian/60"
+              className="inline-flex items-center gap-2 rounded-full border border-obsidian/10 bg-obsidian/5 px-4 py-2 text-xs font-semibold text-obsidian/70"
+              onClick={() => {
+                setIsSettingsOpen((prev) => !prev);
+                setIsProfileOpen(false);
+              }}
+              aria-haspopup="menu"
+              aria-expanded={isSettingsOpen}
             >
-              Sign out
+              <svg
+                viewBox="0 0 24 24"
+                aria-hidden="true"
+                className="h-3.5 w-3.5 text-obsidian/70"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.8"
+              >
+                <circle cx="12" cy="12" r="3.2" />
+                <path d="M12 2.8v2.3M12 18.9v2.3M4.9 4.9l1.7 1.7M17.4 17.4l1.7 1.7M2.8 12h2.3M18.9 12h2.3M4.9 19.1l1.7-1.7M17.4 6.6l1.7-1.7" />
+              </svg>
+              <span>Settings</span>
             </button>
-            <button className="icon-chip">?</button>
-            <button className="icon-chip">?</button>
-            <div className="h-9 w-9 rounded-full bg-obsidian/10" />
-          </div>
-        </header>
-
-        <section className="grid gap-6 lg:grid-cols-[1.05fr_1.4fr]">
-          <div className="grid gap-6">
-            <div className="card p-6">
-              <div className="flex items-center justify-between">
-                <div>
-                  <p className="section-title">ROI Snapshot</p>
-                  <h3 className="font-display text-xl">Before vs. After with AI</h3>
-                </div>
-                <span className="rounded-full bg-mint/20 px-3 py-1 text-xs font-semibold text-mint">
-                  Estimated
-                </span>
-              </div>
-              <div className="mt-4 grid gap-3 text-sm">
-                <div className="flex items-center justify-between rounded-2xl bg-obsidian/5 px-4 py-3">
-                  <span>Requirement analysis</span>
-                  <span className="font-semibold text-obsidian">2–3 days → 20–30 min</span>
-                </div>
-                <div className="flex items-center justify-between rounded-2xl bg-obsidian/5 px-4 py-3">
-                  <span>FSD draft creation</span>
-                  <span className="font-semibold text-obsidian">1–2 days → 15 min</span>
-                </div>
-                <div className="flex items-center justify-between rounded-2xl bg-obsidian/5 px-4 py-3">
-                  <span>Rework rate</span>
-                  <span className="font-semibold text-obsidian">30–40% → 10–15%</span>
-                </div>
-              </div>
-            </div>
-
-            <div className="card p-6">
-              <div className="flex items-center justify-between">
-                <div>
-                  <p className="section-title">Upload Requirement Documents</p>
-                  <h2 className="font-display text-2xl">Drop your Word or PDF files here</h2>
-                </div>
-                <button
-                  onClick={() => {
-                    setText(SAMPLE);
-                    setFile(null);
-                    setDemoMode(false);
-                  }}
-                  className="rounded-full border border-obsidian/20 px-4 py-2 text-xs font-semibold"
-                >
-                  Load sample
+            {isSettingsOpen && (
+              <div className="workspace-menu" role="menu" aria-label="Settings menu">
+                <button className="workspace-menu-item" role="menuitem" onClick={() => setIsSettingsOpen(false)}>
+                  Theme tokens (locked)
+                </button>
+                <button className="workspace-menu-item" role="menuitem" onClick={() => setIsSettingsOpen(false)}>
+                  Notification preferences
                 </button>
               </div>
-              <div className="mt-5 grid gap-4">
-                <div className="rounded-3xl border border-dashed border-obsidian/20 bg-obsidian/5 p-6 text-center">
-                  <p className="text-base font-semibold text-obsidian/70">
-                    Drop your Word or PDF files here or
-                  </p>
-                  <label className="mt-4 inline-flex cursor-pointer items-center gap-2 rounded-full border border-obsidian/20 bg-white px-4 py-2 text-xs font-semibold">
-                    <input
-                      type="file"
-                      className="hidden"
-                      onChange={(event) => setFile(event.target.files?.[0] ?? null)}
-                    />
-                    Upload from device
-                  </label>
-                  <p className="mt-3 text-xs text-obsidian/50">
-                    {file ? file.name : "No file selected"}
-                  </p>
+            )}
+          </div>
+
+          <div className="relative" ref={profileMenuRef}>
+            <button
+              className="icon-chip"
+              onClick={() => {
+                setIsProfileOpen((prev) => !prev);
+                setIsSettingsOpen(false);
+              }}
+              aria-haspopup="menu"
+              aria-expanded={isProfileOpen}
+            >
+              A
+            </button>
+            {isProfileOpen && (
+              <div className="workspace-menu right-0" role="menu" aria-label="Profile menu">
+                <div className="px-3 py-2">
+                  <p className="text-sm font-semibold text-obsidian/80">OSF User</p>
+                  <p className="text-xs text-obsidian/55">user@osf.digital</p>
                 </div>
-
-                <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-center">
-                  <input
-                    value={baselineName}
-                    onChange={(event) => setBaselineName(event.target.value)}
-                    className="w-full rounded-2xl border border-obsidian/15 bg-white px-4 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-signal/30 sm:w-64"
-                    placeholder="Baseline name (e.g., Feb-25)"
-                  />
-                  <button
-                    onClick={handleSaveBaseline}
-                    className="rounded-full border border-obsidian/20 px-4 py-2 text-xs font-semibold"
-                    disabled={loading || !text.trim()}
-                  >
-                    {loading && loadingMode === "baseline"
-                      ? loadingMessage || "Saving..."
-                      : "Save baseline"}
-                  </button>
-                  {baselineNotice && (
-                    <span className="text-xs font-semibold text-obsidian/60">
-                      {baselineNotice}
-                    </span>
-                  )}
-                </div>
-
-                <textarea
-                  value={text}
-                  onChange={(event) => setText(event.target.value)}
-                  className="h-36 w-full rounded-2xl border border-obsidian/15 bg-white p-4 text-sm focus:outline-none focus:ring-2 focus:ring-signal/30"
-                  placeholder="Paste requirements, one per line."
-                />
-
-                <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap">
-                  <button
-                    onClick={handleAnalyze}
-                    className="rounded-full bg-signal px-6 py-3 text-sm font-semibold text-white shadow-glow"
-                    disabled={loading}
-                  >
-                    {loading && loadingMode === "analyze"
-                      ? loadingMessage || "Analyzing..."
-                      : "Start Analysis"}
-                  </button>
-                  <button
-                    onClick={runGuidedDemo}
-                    className="rounded-full border border-obsidian/20 px-6 py-3 text-sm"
-                  >
-                    Load demo case
-                  </button>
-                  <button
-                    onClick={() => setFile(null)}
-                    className="rounded-full border border-obsidian/20 px-6 py-3 text-sm"
-                  >
-                    Clear file
-                  </button>
-                </div>
-
-                {loading && loadingMode === "analyze" && (
-                  <div className="flex items-center gap-2 text-xs font-semibold text-obsidian/60">
-                    <span className="h-2 w-2 animate-pulse rounded-full bg-signal" />
-                    <span>{loadingMessage || "Processing"}</span>
-                  </div>
-                )}
-                {error && <p className="text-sm text-rose">{error}</p>}
+                <div className="my-1 border-t border-obsidian/10" />
+                <button className="workspace-menu-item" role="menuitem" onClick={handleSignOut}>
+                  Logout
+                </button>
               </div>
+            )}
+          </div>
+
+          <button
+            className="icon-chip lg:hidden"
+            onClick={() => setIsMobileSummaryOpen(true)}
+            aria-label="Open summary panel"
+          >
+            ?
+          </button>
+        </div>
+      </header>
+
+      <section className={`workspace-grid ${isHistoryCollapsed ? "history-collapsed" : ""}`}>
+        <aside
+          className={`history-panel ${isMobileHistoryOpen ? "mobile-open" : ""}`}
+          aria-label="Chat history"
+          ref={historyDrawerRef}
+        >
+          {isHistoryCollapsed && (
+            <div className="history-collapsed-only hidden lg:flex">
+              <button
+                className="icon-chip"
+                onClick={() => setIsHistoryCollapsed(false)}
+                aria-label="Expand history"
+              >
+                {">"}
+              </button>
             </div>
+          )}
 
-            <div className="card p-6">
-              <div className="flex items-center justify-between">
-                <div>
-                  <p className="section-title">Coverage Pulse</p>
-                  <h3 className="font-display text-xl">OOTB readiness snapshot</h3>
-                </div>
-                <span className="rounded-full bg-mint/20 px-3 py-1 text-xs font-semibold text-mint">
-                  {summary.total ? `${summary.total} reqs` : "No data"}
-                </span>
-              </div>
-              <div className="mt-4 grid gap-3 text-sm">
-                <div className="flex justify-between rounded-2xl bg-obsidian/5 px-4 py-3">
-                  <span>Total Requirements</span>
-                  <span className="font-semibold text-obsidian">{summary.total}</span>
-                </div>
-                <div className="flex justify-between rounded-2xl bg-obsidian/5 px-4 py-3">
-                  <span>OOTB Match</span>
-                  <span className="font-semibold text-mint">{summary.oob}</span>
-                </div>
-                <div className="flex justify-between rounded-2xl bg-obsidian/5 px-4 py-3">
-                  <span>Partial Match</span>
-                  <span className="font-semibold text-amber">{summary.partial}</span>
-                </div>
-                <div className="flex justify-between rounded-2xl bg-obsidian/5 px-4 py-3">
-                  <span>Custom Dev Required</span>
-                  <span className="font-semibold text-signal">{summary.custom}</span>
-                </div>
-                <div className="flex justify-between rounded-2xl bg-obsidian/5 px-4 py-3">
-                  <span>Open Questions</span>
-                  <span className="font-semibold text-rose">{summary.open}</span>
-                </div>
+          <div className={`history-content ${isHistoryCollapsed ? "lg:hidden" : ""}`}>
+            <div className="history-header">
+              <div className="flex w-full items-center justify-between gap-2">
+                <h2 className="section-title !tracking-[0.2em]">Threads</h2>
+                <button
+                  className="rounded-full border border-obsidian/15 bg-white px-2.5 py-1 text-[0.68rem] font-semibold text-obsidian/70"
+                  onClick={startNewThread}
+                >
+                  + New
+                </button>
               </div>
               <button
-                onClick={handleGenerate}
-                disabled={loading || results.length === 0}
-                className="mt-6 w-full rounded-full bg-obsidian px-6 py-3 text-sm font-semibold text-white"
+                className="icon-chip lg:hidden"
+                onClick={() => setIsMobileHistoryOpen(false)}
+                aria-label="Close chat history"
               >
-                {loading && loadingMode === "generate"
-                  ? loadingMessage || "Generating..."
-                  : "Generate FSD Draft"}
+                x
               </button>
             </div>
 
-            <div className="card p-6">
-              <div className="flex items-center justify-between">
-                <div>
-                  <p className="section-title">Functional Specification Document</p>
-                  <h3 className="font-display text-xl">FSD Executive Preview</h3>
-                </div>
-                <div className="flex gap-2">
+            <div role="listbox" aria-label="Previous chats" className="history-list">
+              {threads.map((thread) => (
+                <div
+                  key={thread.id}
+                  className={`history-thread ${thread.id === activeThread?.id ? "active" : ""}`}
+                  title={thread.title}
+                >
                   <button
-                    onClick={async () => {
-                      if (!fsd) {
-                        setError("Generate the FSD first, then you can copy it.");
-                        return;
-                      }
-                      await navigator.clipboard.writeText(fsd);
-                      setActionNotice("FSD copied to clipboard.");
+                    className="history-thread-main"
+                    onClick={() => {
+                      if (renamingThreadId === thread.id || pendingDeleteThreadId === thread.id) return;
+                      setActiveThreadId(thread.id);
+                      setIsMobileHistoryOpen(false);
                     }}
-                    disabled={!fsd}
-                    className="rounded-full border border-obsidian/20 px-4 py-2 text-xs font-semibold"
+                    role="option"
+                    aria-selected={thread.id === activeThread?.id}
                   >
-                    Copy
+                    {deletingThreadId === thread.id ? (
+                      <div className="history-thread-danger confirm">
+                        <span className="history-thread-danger-text">Thread deleted</span>
+                      </div>
+                    ) : pendingDeleteThreadId === thread.id ? (
+                      <div className="history-thread-danger">
+                        <span className="history-thread-danger-text">Are you sure?</span>
+                        <div className="history-thread-danger-actions">
+                          <button
+                            className="history-thread-danger-yes"
+                            onClick={(event) => {
+                              event.preventDefault();
+                              event.stopPropagation();
+                              handleConfirmDeleteThread(thread.id);
+                            }}
+                            aria-label={`Confirm delete ${thread.title}`}
+                          >
+                            Yes
+                          </button>
+                          <button
+                            className="history-thread-danger-no"
+                            onClick={(event) => {
+                              event.preventDefault();
+                              event.stopPropagation();
+                              setPendingDeleteThreadId(null);
+                            }}
+                            aria-label={`Cancel delete ${thread.title}`}
+                          >
+                            No
+                          </button>
+                        </div>
+                      </div>
+                    ) : renamingThreadId === thread.id ? (
+                      <div className="history-thread-edit">
+                        <input
+                          autoFocus
+                          value={renameDraft}
+                          onChange={(event) => setRenameDraft(event.target.value)}
+                          className="history-thread-input"
+                          onKeyDown={(event) => {
+                            if (event.key === "Enter") {
+                              event.preventDefault();
+                              handleSaveThreadRename(thread.id);
+                            }
+                            if (event.key === "Escape") {
+                              event.preventDefault();
+                              setRenamingThreadId(null);
+                              setRenameDraft("");
+                            }
+                          }}
+                          aria-label="Rename thread"
+                        />
+                        <button
+                          className="history-thread-save"
+                          onClick={(event) => {
+                            event.preventDefault();
+                            event.stopPropagation();
+                            handleSaveThreadRename(thread.id);
+                          }}
+                          aria-label={`Save renamed thread ${thread.title}`}
+                        >
+                          <svg
+                            viewBox="0 0 24 24"
+                            aria-hidden="true"
+                            className="h-3.5 w-3.5"
+                            fill="none"
+                            stroke="currentColor"
+                            strokeWidth="2.2"
+                          >
+                            <path d="M5 12.5l4.2 4.2L19 7" />
+                          </svg>
+                        </button>
+                      </div>
+                    ) : (
+                      <span className="history-thread-title">{thread.title}</span>
+                    )}
                   </button>
-                  <button
-                    onClick={handleDownloadDocx}
-                    disabled={loading || results.length === 0}
-                    className="rounded-full bg-obsidian px-4 py-2 text-xs font-semibold text-white"
-                  >
-                    {loading && loadingMode === "download"
-                      ? loadingMessage || "Preparing..."
-                      : "Download .docx"}
-                  </button>
-                </div>
-              </div>
-              {actionNotice && (
-                <p className="mt-3 text-xs font-semibold text-obsidian/60">{actionNotice}</p>
-              )}
-              <div className="mt-4 grid gap-4 lg:grid-cols-[0.35fr_1fr]">
-                <div className="rounded-2xl border border-obsidian/10 bg-obsidian/5 p-3 text-xs">
-                  {[
-                    "Overview",
-                    "OOTB Coverage",
-                    "Partial",
-                    "Custom",
-                    "Assumptions",
-                    "Open Questions",
-                    "Effort",
-                  ].map((item, idx) => (
-                    <div
-                      key={item}
-                      className={`flex items-center gap-2 rounded-xl px-3 py-2 text-obsidian/70 ${
-                        idx === 0 ? "bg-white font-semibold" : ""
-                      }`}
-                    >
-                      <span className="h-2 w-2 rounded-full bg-signal/40" />
-                      {item}
+                  {!isHistoryCollapsed && pendingDeleteThreadId !== thread.id && deletingThreadId !== thread.id && (
+                    <div className="history-thread-meta">
+                      <span className="history-thread-time">{formatDateTime(thread.updatedAt)}</span>
+                      {renamingThreadId !== thread.id && (
+                        <div className="history-thread-links">
+                          <button
+                            className="history-thread-link"
+                            onClick={() => handleRenameThread(thread.id)}
+                            aria-label={`Rename ${thread.title}`}
+                          >
+                            Rename
+                          </button>
+                          <button
+                            className="history-thread-link delete"
+                            onClick={() => handleDeleteThread(thread.id)}
+                            aria-label={`Delete ${thread.title}`}
+                          >
+                            Delete
+                          </button>
+                        </div>
+                      )}
                     </div>
-                  ))}
-                </div>
-                <pre className="max-h-72 overflow-auto whitespace-pre-wrap rounded-2xl border border-obsidian/10 bg-white p-4 text-sm text-obsidian/80">
-                  {fsd || "Generate the FSD to view it here."}
-                </pre>
-              </div>
-            </div>
-          </div>
-
-          <div className="grid gap-6">
-            <div className="card p-6">
-              <div className="flex items-center justify-between">
-                <div>
-                  <p className="section-title">Demo Storyline</p>
-                  <h3 className="font-display text-xl">
-                    From scattered requirements → evidence‑backed gaps → sign‑off‑ready FSD
-                  </h3>
-                </div>
-                <button
-                  onClick={runGuidedDemo}
-                  className="rounded-full border border-obsidian/20 px-4 py-2 text-xs font-semibold"
-                >
-                  Start guided demo
-                </button>
-              </div>
-              <ol className="mt-4 grid gap-2 text-sm text-obsidian/70">
-                <li>1. Load demo case</li>
-                <li>2. Review gap table + evidence</li>
-                <li>3. Open “Why this?” for reasoning</li>
-                <li>4. Generate FSD executive preview</li>
-                <li>5. Export .docx for stakeholders</li>
-              </ol>
-            </div>
-            <div className="card p-6" ref={gapTableRef}>
-              <div className="flex items-center justify-between">
-                <div>
-                  <p className="section-title">Scope Diff</p>
-                  <h3 className="font-display text-xl">Compare two requirement sets</h3>
-                </div>
-                <button
-                  onClick={handleScopeDiff}
-                  disabled={loading || !text.trim() || !compareText.trim()}
-                  className="rounded-full bg-obsidian px-4 py-2 text-xs font-semibold text-white"
-                >
-                  {loading && loadingMode === "analyze" ? "Comparing..." : "Compare"}
-                </button>
-              </div>
-              <div className="mt-4 grid gap-4">
-                <textarea
-                  value={compareText}
-                  onChange={(event) => setCompareText(event.target.value)}
-                  className="h-28 w-full rounded-2xl border border-obsidian/15 bg-white p-4 text-sm focus:outline-none focus:ring-2 focus:ring-signal/30"
-                  placeholder="Paste the earlier requirement set here."
-                />
-                {diffSummary && (
-                  <div className="grid gap-3 rounded-2xl border border-obsidian/10 bg-obsidian/5 p-4 text-xs text-obsidian/70">
-                    <div className="flex flex-wrap gap-3">
-                      <span>Added: {diffSummary.added.length}</span>
-                      <span>Removed: {diffSummary.removed.length}</span>
-                      <span>Unchanged: {diffSummary.unchanged.length}</span>
-                    </div>
-                    <div className="grid gap-2">
-                      {diffSummary.added.slice(0, 3).map((item) => (
-                        <span key={`add-${item}`}>+ {item}</span>
-                      ))}
-                      {diffSummary.removed.slice(0, 3).map((item) => (
-                        <span key={`remove-${item}`}>- {item}</span>
-                      ))}
-                    </div>
-                  </div>
-                )}
-              </div>
-            </div>
-
-            <div className="card p-6" ref={fsdRef}>
-              <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
-                <div>
-                  <p className="section-title">Gap Analysis Results</p>
-                  <h2 className="font-display text-2xl">Confidence-ranked coverage</h2>
-                </div>
-                <div className="flex flex-wrap items-center gap-2 text-xs font-semibold text-obsidian/60">
-                  <span className="rounded-full border border-obsidian/10 px-3 py-1">
-                    Auto-ranked by impact
-                  </span>
-                  <span className="rounded-full border border-obsidian/10 px-3 py-1">Evidence-linked</span>
-                  <button
-                    onClick={exportTraceabilityCsv}
-                    disabled={results.length === 0}
-                    className="rounded-full border border-obsidian/10 px-3 py-1 text-xs"
-                  >
-                    Export traceability
-                  </button>
-                  <button
-                    onClick={() => setShowDebug((prev) => !prev)}
-                    className="rounded-full border border-obsidian/10 px-3 py-1 text-xs"
-                  >
-                    {showDebug ? "Hide debug" : "Show debug"}
-                  </button>
-                </div>
-              </div>
-
-              <div className="mt-4 flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-center">
-                <div className="flex w-full items-center gap-2 rounded-full border border-obsidian/15 bg-white px-4 py-2 text-sm sm:flex-1">
-                  <span className="text-obsidian/40">??</span>
-                  <input
-                    value={search}
-                    onChange={(event) => setSearch(event.target.value)}
-                    className="w-full bg-transparent outline-none"
-                    placeholder="Search requirements..."
-                  />
-                </div>
-                <div className="flex flex-wrap items-center gap-2 text-xs font-semibold">
-                  <span className="rounded-full border border-obsidian/10 px-3 py-1">All</span>
-                  <span className="rounded-full bg-mint/20 px-3 py-1 text-mint">OOTB</span>
-                  <span className="rounded-full bg-amber/20 px-3 py-1 text-amber">Partial</span>
-                  <span className="rounded-full bg-signal/20 px-3 py-1 text-signal">Custom</span>
-                  {demoMode && (
-                    <span className="rounded-full bg-obsidian/10 px-3 py-1 text-obsidian/60">
-                      Demo mode
-                    </span>
                   )}
                 </div>
+              ))}
+            </div>
+            <div className="history-footer hidden lg:block">
+              <button
+                className="history-collapse-btn"
+                onClick={() => setIsHistoryCollapsed(true)}
+                aria-label="Collapse history"
+              >
+                <span aria-hidden="true">&lt;</span>
+                <span>Collapse</span>
+              </button>
+            </div>
+          </div>
+        </aside>
+
+        <section className="chat-panel" aria-label="Main chat panel">
+          {isFsdPreviewOpen ? (
+            <div className="fsd-preview-wrap">
+              <div className="chat-panel-header">
+                <p className="section-title">FSD Preview</p>
+                <button
+                  className="history-thread-link"
+                  onClick={() => setIsFsdPreviewOpen(false)}
+                  aria-label="Close FSD preview"
+                >
+                  ← Back to discussion
+                </button>
+              </div>
+              <div className="fsd-preview-body">
+                <div className="fsd-preview-outline">
+                  <p className="text-[0.68rem] font-semibold uppercase tracking-[0.14em] text-obsidian/55">
+                    Outline
+                  </p>
+                  <div className="mt-2 grid gap-1 text-sm text-obsidian/75">
+                    {fsdOutline.length > 0 ? (
+                      fsdOutline.map((line, idx) => <p key={`outline-${idx}`}>{line}</p>)
+                    ) : (
+                      <p>Preview is empty.</p>
+                    )}
+                  </div>
+                </div>
+                <div className="fsd-preview-content">
+                  <p className="text-[0.68rem] font-semibold uppercase tracking-[0.14em] text-obsidian/55">
+                    Content
+                  </p>
+                  <pre className="fsd-preview-text">{fsdPreview || "No FSD content generated."}</pre>
+                </div>
+              </div>
+              <div className="fsd-preview-actions">
+                <button
+                  onClick={() => void handleExportDocx()}
+                  disabled={loading || latestAnalysisResults.length === 0}
+                  className="rounded-full bg-mint px-5 py-2.5 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  {loading ? "Preparing..." : "Export FSD (.docx)"}
+                </button>
+                <button
+                  onClick={() => void openConfluenceModal()}
+                  disabled={loading || !latestAnalysisResults.length}
+                  className="rounded-full bg-signal px-5 py-2.5 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  Save to Confluence
+                </button>
+              </div>
+            </div>
+          ) : (
+            <>
+              <div className="chat-panel-header">
+                <p className="section-title">Requirement Discussion</p>
+                <p className="text-xs font-semibold text-obsidian/55">
+                  Discuss scope with AI and finalize analysis output
+                </p>
               </div>
 
-              <div className="mt-4 grid gap-3">
-                {baselineSummary && (
-                  <div className="rounded-2xl border border-obsidian/10 bg-obsidian/5 p-4 text-xs text-obsidian/60">
-                    <div className="flex flex-wrap items-center justify-between gap-2">
-                      <span className="font-semibold text-obsidian/80">
-                        Baseline: {baselineSummary.name}
-                      </span>
-                      {baselineSummary.created_at && <span>Saved: {baselineSummary.created_at}</span>}
+              <div className="chat-transcript" ref={chatScrollRef}>
+                {activeThread?.messages.map((message, index) => (
+                  <article
+                    key={message.id}
+                    className={`chat-bubble ${message.role} ${
+                      message.role === "assistant" &&
+                      index === 0 &&
+                      activeThread?.id === introAnimationThreadId
+                        ? "chat-bubble-intro"
+                        : ""
+                    }`}
+                  >
+                    <div className="chat-meta">
+                      <span>{message.role === "user" ? "You" : "AI Analyst"}</span>
+                      <span>{formatTime(message.createdAt)}</span>
                     </div>
-                    <div className="mt-2 flex flex-wrap items-center gap-3">
-                      <span>Added: {baselineSummary.added}</span>
-                      <span>Changed: {baselineSummary.changed}</span>
-                      <span>Unchanged: {baselineSummary.unchanged}</span>
-                      <span>Removed: {baselineSummary.removed}</span>
-                    </div>
-                  </div>
-                )}
-                {baselineRemoved.length > 0 && (
-                  <div className="rounded-2xl border border-obsidian/10 bg-obsidian/5 p-4 text-xs text-obsidian/60">
-                    <div className="font-semibold text-obsidian/80">Removed from baseline</div>
-                    <div className="mt-2 grid gap-2">
-                      {baselineRemoved.map((item, idx) => (
-                        <div key={`removed-${idx}`} className="flex flex-wrap items-center gap-2">
-                          <span className="rounded-full border border-obsidian/10 px-2 py-0.5 text-[0.6rem]">
-                            Removed
+                    <p className="chat-text">{message.text}</p>
+
+                    {message.attachments?.length ? (
+                      <div className="chat-attachments">
+                        {message.attachments.map((item) => (
+                          <span key={item.id} className="attachment-chip">
+                            {item.name} ({Math.max(1, Math.round(item.size / 1024))} KB)
                           </span>
-                          <span>{item.requirement || "n/a"}</span>
-                          {item.classification && (
-                            <span className="text-[0.6rem] uppercase tracking-[0.2em] text-obsidian/50">
-                              {item.classification}
-                            </span>
-                          )}
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                )}
+                        ))}
+                      </div>
+                    ) : null}
 
-                <div className="rounded-2xl border border-obsidian/10 bg-white">
-                  <div className="sticky top-0 z-10 grid grid-cols-3 items-center gap-4 border-b border-obsidian/10 bg-white/95 px-5 py-3 text-[0.7rem] font-semibold uppercase tracking-[0.2em] text-obsidian/50 backdrop-blur md:grid-cols-[1.7fr_0.7fr_0.7fr]">
-                    <span>Requirement</span>
-                    <span
-                      className="text-center"
-                      title="How well SFRA coverage matches the requirement (OOTB, Partial, Custom)."
-                    >
-                      Classification
-                    </span>
-                    <span
-                      className="text-right"
-                      title="Overall confidence based on evidence + similarity signals."
-                    >
-                      Confidence
-                    </span>
-                  </div>
-                  <div className="max-h-[360px] overflow-auto">
-                    {filteredResults.length === 0 && (
-                      <p className="px-5 py-6 text-sm text-obsidian/60">
-                        Run the analysis to surface strategic gaps.
-                      </p>
-                    )}
-                    {filteredResults.map((item, index) => {
-                      const sources = getSources(item);
-                      const similarityPct =
-                        item.similarity_score != null ? Math.round(item.similarity_score * 100) : 0;
-
-                      return (
-                        <div
-                          key={`${item.requirement}-${index}`}
-                          className="border-b border-obsidian/10 px-5 py-4 last:border-b-0 hover:bg-obsidian/5"
-                        >
-                          <div className="grid grid-cols-1 gap-4 md:grid-cols-[1.7fr_0.7fr_0.7fr] md:items-start">
-                            <div>
-                              <p className="text-sm font-semibold text-obsidian">
-                                {item.requirement}
-                              </p>
-                              <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-obsidian/60">
-                                {sources.length > 0 ? (
-                                  sources.map((source) => (
-                                    <a
-                                      key={source.url}
-                                      href={source.url}
-                                      target="_blank"
-                                      rel="noreferrer"
-                                      className="rounded-full border border-obsidian/10 px-3 py-1 text-obsidian/70 hover:text-obsidian"
-                                    >
-                                      {source.title}
-                                    </a>
-                                  ))
-                                ) : (
-                                  <span className="rounded-full border border-obsidian/10 px-3 py-1 text-obsidian/50">
-                                    No sources yet
-                                  </span>
-                                )}
-                              </div>
-                              {item.top_chunks?.length > 0 && (
-                                <div className="mt-3 grid gap-2">
-                                  {item.top_chunks.slice(0, 2).map((chunk, idx) => (
-                                    <div
-                                      key={`${item.requirement}-chunk-${idx}`}
-                                      className="rounded-2xl border border-obsidian/10 bg-obsidian/5 px-3 py-2 text-xs text-obsidian/70"
-                                    >
-                                      <div className="text-[0.65rem] uppercase tracking-[0.2em] text-obsidian/50">
-                                        Evidence
-                                      </div>
-                                      <div className="mt-1">{chunk.text}</div>
-                                      {typeof chunk.metadata?.url === "string" && (
-                                        <a
-                                          className="mt-2 inline-flex items-center gap-2 text-[0.7rem] font-semibold text-obsidian/70 underline decoration-obsidian/30"
-                                          href={chunk.metadata.url}
-                                          target="_blank"
-                                          rel="noreferrer"
-                                        >
-                                          {typeof chunk.metadata?.title === "string"
-                                            ? chunk.metadata.title
-                                            : "Open source"}
-                                        </a>
-                                      )}
-                                    </div>
-                                  ))}
-                                </div>
-                              )}
-                              {item.baseline_status && item.baseline_status !== "new" && (
-                                <div className="mt-2 flex flex-wrap items-center gap-2 text-[0.7rem] text-obsidian/60">
-                                  <span>Baseline: {item.baseline_classification || "n/a"}</span>
-                                  {item.baseline_confidence != null && (
-                                    <span>({Math.round(item.baseline_confidence * 100)}%)</span>
-                                  )}
-                                  {item.baseline_status === "changed" && item.baseline_requirement && (
-                                    <span>Changed from: "{item.baseline_requirement}"</span>
-                                  )}
-                                </div>
-                              )}
-                            </div>
-                            <div className="flex flex-col items-start gap-2 md:items-center">
-                              {item.baseline_status && (
-                                <span className={`badge ${baselineTone(item.baseline_status)}`}>
-                                  {item.baseline_status}
-                                </span>
-                              )}
-                              <span className={`badge ${badgeTone(item.classification)}`}>
+                    {message.analysisResults?.length ? (
+                      <div className="analysis-grid">
+                        {message.analysisResults.map((item, index) => (
+                          <div key={`${item.requirement}-${index}`} className="analysis-item">
+                            <div className="analysis-item-header">
+                              <span className="font-semibold text-obsidian">{item.requirement}</span>
+                              <span className={`badge ${classifyTone(item.classification)}`}>
                                 {item.classification}
                               </span>
                             </div>
-                            <div className="flex flex-col items-start gap-2 text-sm text-obsidian/70 md:items-end">
-                              <div className="flex items-center justify-start gap-3 md:justify-end">
-                                <div
-                                  className="relative h-10 w-10 rounded-full"
-                                  style={{
-                                    background: `conic-gradient(#0b0f14 ${Math.round(
-                                      item.confidence * 100
-                                    )}%, rgba(11, 15, 20, 0.12) 0)`,
-                                  }}
-                                >
-                                  <div className="absolute inset-1 rounded-full bg-white" />
-                                  <div className="absolute inset-0 flex items-center justify-center text-[0.65rem] font-semibold text-obsidian">
-                                    {(item.confidence * 100).toFixed(0)}%
-                                  </div>
-                                </div>
-                                <div className="text-right">
-                                  <span className="text-base font-semibold text-obsidian">
-                                    {(item.confidence * 100).toFixed(0)}%
-                                  </span>
-                                  <div className="text-[0.7rem] text-obsidian/50">Confidence</div>
+                            <p className="text-xs text-obsidian/70">{item.rationale}</p>
+                            {item.clarifying_questions && item.clarifying_questions.length > 0 && (
+                              <div className="mt-2 rounded-xl border border-amber/25 bg-amber/10 px-3 py-2">
+                                <p className="text-[0.65rem] font-semibold uppercase tracking-[0.12em] text-amber">
+                                  Follow-up needed
+                                </p>
+                                <div className="mt-1 grid gap-1 text-xs text-obsidian/70">
+                                  {item.clarifying_questions.slice(0, 3).map((question, qIdx) => (
+                                    <div
+                                      key={`${item.requirement}-q-${qIdx}`}
+                                      className="followup-row group/followup"
+                                    >
+                                      <p className="followup-text">- {question}</p>
+                                      <button
+                                        className="followup-arrow"
+                                        onClick={() => handleFollowUpQuestionSelect(question, item.requirement)}
+                                        aria-label={`Reply to follow-up question: ${question}`}
+                                        title="Reply to this follow-up"
+                                      >
+                                        Reply
+                                      </button>
+                                    </div>
+                                  ))}
                                 </div>
                               </div>
-                              <span
-                                className="text-xs text-obsidian/50"
-                                title="Text similarity between requirement and evidence chunks."
-                              >
-                                Similarity {similarityPct}%
-                              </span>
-                              <button
-                                onClick={() =>
-                                  setExpandedWhy((prev) => {
-                                    const next = new Set(prev);
-                                    if (next.has(index)) next.delete(index);
-                                    else next.add(index);
-                                    return next;
-                                  })
-                                }
-                                className="rounded-full border border-obsidian/10 px-3 py-1 text-[0.65rem] font-semibold uppercase tracking-[0.2em] text-obsidian/60"
-                              >
-                                {expandedWhy.has(index) ? "Hide why" : "Why this?"}
-                              </button>
+                            )}
+                            <div className="mt-2 flex flex-wrap gap-2">
+                              {getSources(item).slice(0, 2).map((source) => (
+                                <a
+                                  key={source.url}
+                                  href={source.url}
+                                  target="_blank"
+                                  rel="noreferrer"
+                                  className="rounded-full border border-obsidian/10 px-3 py-1 text-[0.65rem] text-obsidian/70"
+                                >
+                                  {source.title}
+                                </a>
+                              ))}
                             </div>
                           </div>
-                          {expandedWhy.has(index) && (
-                            <div className="mt-3 rounded-2xl border border-obsidian/10 bg-white p-3 text-xs text-obsidian/70">
-                              <div className="text-[0.65rem] uppercase tracking-[0.2em] text-obsidian/50">
-                                Explanation
-                              </div>
-                              <p className="mt-2">{item.rationale || "No rationale available."}</p>
-                              {item.llm_response && (
-                                <p className="mt-2 text-obsidian/60">
-                                  Model note: {item.llm_response}
-                                </p>
-                              )}
-                            </div>
+                        ))}
+                      </div>
+                    ) : null}
+                {message.role === "assistant" && index > 0 && message.analysisResults?.length && (
+                  <div className="mt-3 flex justify-start">
+                    <button
+                      className="chat-fsd-btn"
+                      onClick={() => handleAddToFsd(message)}
+                          disabled={activeAddedMessageIds.has(message.id)}
+                        >
+                          {activeAddedMessageIds.has(message.id) ? "Added to FSD" : "Add to FSD"}
+                        </button>
+                        {recentlyAddedToSidebar?.threadId === activeThreadId &&
+                          recentlyAddedToSidebar?.messageId === message.id && (
+                            <span className="ml-2 self-center text-[0.68rem] font-semibold text-signal chat-inline-toast">
+                              Added to summary sidebar
+                            </span>
                           )}
-                          {showDebug && (
-                            <div className="mt-3 rounded-2xl border border-obsidian/10 bg-obsidian/5 p-3 text-xs text-obsidian/60">
-                              <div className="flex flex-wrap items-center gap-4">
-                                <span>Similarity score: {similarityPct}%</span>
-                                <span>
-                                  LLM confidence:{" "}
-                                  {item.llm_confidence != null
-                                    ? `${Math.round(item.llm_confidence * 100)}%`
-                                    : "n/a"}
-                                </span>
-                                <span>LLM context: top 3 evidence chunks</span>
-                              </div>
-                              <div className="mt-2 text-[0.7rem] text-obsidian/50">LLM response</div>
-                              <div className="mt-1 whitespace-pre-wrap text-[0.75rem] text-obsidian/70">
-                                {item.llm_response || "n/a"}
-                              </div>
-                            </div>
-                          )}
-                        </div>
-                      );
-                    })}
+                      </div>
+                    )}
+                  </article>
+                ))}
+                {isChatAnalyzing && (
+                  <article className="chat-bubble assistant">
+                    <div className="chat-meta">
+                      <span>AI Analyst</span>
+                    </div>
+                    <div className="ai-loader-row">
+                      <span className="ai-loader-icon" aria-hidden="true" />
+                      <p className="chat-text ai-loader-text">{ANALYSIS_STEPS[analysisStepIndex]}...</p>
+                    </div>
+                  </article>
+                )}
+              </div>
+
+              <div className="chat-composer-wrap">
+                {selectedFollowUpQuestion && (
+                  <div className="selected-followup">
+                    <div className="selected-followup-label">Replying to follow-up:</div>
+                    <div className="selected-followup-content">
+                      <span className="selected-followup-text">{selectedFollowUpQuestion.question}</span>
+                      <button
+                        className="selected-followup-clear"
+                        onClick={() => setSelectedFollowUpQuestion(null)}
+                        aria-label="Clear selected follow-up question"
+                      >
+                        ×
+                      </button>
+                    </div>
+                  </div>
+                )}
+                <div className="chat-attachments-list">
+                  {attachments.map((item) => (
+                    <span key={item.id} className="attachment-chip">
+                      {item.name}
+                      <button
+                        className="ml-2 text-obsidian/60"
+                        onClick={() => removeAttachment(item.id)}
+                        aria-label={`Remove ${item.name}`}
+                      >
+                        x
+                      </button>
+                    </span>
+                  ))}
+                </div>
+                <div className="chat-composer" role="group" aria-label="Message composer">
+                  <label className="composer-attach">
+                    +
+                    <input
+                      type="file"
+                      className="hidden"
+                      multiple
+                      onChange={(event) => handleAttachFiles(event.target.files)}
+                    />
+                  </label>
+                  <textarea
+                    ref={composerRef}
+                    value={composer}
+                    onChange={(event) => setComposer(event.target.value)}
+                    className="composer-input"
+                    placeholder={
+                      selectedFollowUpQuestion
+                        ? "Type your reply to the selected follow-up question..."
+                        : "Discuss scope, requirements, assumptions, and constraints..."
+                    }
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter" && !event.shiftKey) {
+                        event.preventDefault();
+                        if (!loading) void handleSend();
+                      }
+                    }}
+                  />
+                  <button
+                    onClick={() => void handleSend()}
+                    className="composer-send"
+                    disabled={loading || (!composer.trim() && attachments.length === 0)}
+                  >
+                    Send
+                  </button>
+                </div>
+                <p className="mt-2 text-center text-[0.7rem] text-obsidian/55">
+                  Responses can be inaccurate; please double check before finalizing.
+                </p>
+                {error && <p className="text-xs font-semibold text-rose">{error}</p>}
+                {actionNotice && <p className="text-xs font-semibold text-obsidian/60">{actionNotice}</p>}
+              </div>
+            </>
+          )}
+        </section>
+
+        <aside
+          className={`summary-panel ${isMobileSummaryOpen ? "mobile-open" : ""}`}
+          aria-label="Summary and analysis"
+          ref={summaryDrawerRef}
+        >
+          <div className="summary-header">
+            <div>
+              <p className="section-title">Summary & Analysis</p>
+              <h2 className="font-display text-xl text-obsidian">FSD Generation</h2>
+            </div>
+            <button
+              className="icon-chip lg:hidden"
+              onClick={() => setIsMobileSummaryOpen(false)}
+              aria-label="Close summary panel"
+            >
+              x
+            </button>
+          </div>
+
+          <div className="summary-insights">
+            {activeFsdSelections.length === 0 ? (
+              <div className="summary-empty-state">
+                <span className="summary-empty-icon" aria-hidden="true">
+                  <svg
+                    viewBox="0 0 24 24"
+                    className="h-5 w-5"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="1.9"
+                  >
+                    <path d="M4 6.5c0-1.1.9-2 2-2h12c1.1 0 2 .9 2 2v8c0 1.1-.9 2-2 2H9l-4 3v-3H6c-1.1 0-2-.9-2-2v-8Z" />
+                    <path d="M8 9h8M8 12h5" />
+                  </svg>
+                </span>
+                <p className="text-sm text-obsidian/60">
+                  Start a discussion, then add finalized requirements and AI responses here.
+                </p>
+              </div>
+            ) : (
+              activeFsdSelections.map((item) => (
+                <div key={item.id} className="summary-card">
+                  <div className="flex items-center justify-between">
+                    <div className="flex flex-wrap items-center gap-2">
+                      {item.classifications.length > 0 ? (
+                        item.classifications.map((classification, idx) => (
+                          <span key={`${item.id}-class-${idx}`} className="badge bg-signal/20 text-signal">
+                            {classification}
+                          </span>
+                        ))
+                      ) : (
+                        <span className="badge bg-obsidian/10 text-obsidian">Analysis</span>
+                      )}
+                    </div>
+                    <button
+                      className="history-thread-link delete"
+                      onClick={() => handleRemoveFromFsd(item.id, item.messageId)}
+                    >
+                      Remove
+                    </button>
+                  </div>
+                  <div className="mt-3 rounded-2xl border border-slate/30 bg-white/80 p-3">
+                    <p className="text-[0.68rem] font-semibold uppercase tracking-[0.14em] text-obsidian/55">
+                      Requirement
+                    </p>
+                    <div className="mt-2 grid gap-1.5 text-sm text-obsidian/75">
+                      {item.requirements.length > 0 ? (
+                        item.requirements.map((requirement, idx) => (
+                          <p key={`${item.id}-req-${idx}`}>{requirement}</p>
+                        ))
+                      ) : (
+                        <p>No requirement extracted</p>
+                      )}
+                    </div>
+                  </div>
+                  <div className="mt-2 rounded-2xl border border-slate/30 bg-white/80 p-3">
+                    <p className="text-[0.68rem] font-semibold uppercase tracking-[0.14em] text-obsidian/55">
+                      Analysis
+                    </p>
+                    <p className="mt-2 text-sm text-obsidian/75">{item.response}</p>
                   </div>
                 </div>
-              </div>
+              ))
+            )}
+          </div>
+
+          <div className="summary-export">
+            <button
+              onClick={() => void handleOpenFsdPreview()}
+              disabled={fsdPreviewLoading || !latestAnalysisResults.length}
+              className="inline-flex w-full items-center justify-center gap-2 rounded-full bg-steel px-4 py-3 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              {fsdPreviewLoading ? (
+                <>
+                  <span className="preview-loader-icon" aria-hidden="true" />
+                  <span className="preview-loader-text">Generating preview...</span>
+                </>
+              ) : (
+                "← Preview FSD"
+              )}
+            </button>
+            {fsdPreview.trim() && (
+              <>
+                <button
+                  onClick={() => void handleExportDocx()}
+                  disabled={loading || latestAnalysisResults.length === 0}
+                  className="mt-2 w-full rounded-full bg-mint px-4 py-3 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  {loading ? "Preparing..." : "Export FSD (.docx)"}
+                </button>
+                <button
+                  onClick={() => void openConfluenceModal()}
+                  disabled={loading || !latestAnalysisResults.length}
+                  className="mt-2 w-full rounded-full bg-signal px-4 py-3 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  Save to Confluence
+                </button>
+              </>
+            )}
+            <p className="mt-2 text-center text-[0.7rem] text-obsidian/55">
+              Open preview to review outline and access export/save actions.
+            </p>
+          </div>
+        </aside>
+      </section>
+
+      {(isMobileHistoryOpen || isMobileSummaryOpen) && (
+        <button className="mobile-overlay" aria-label="Close panels" onClick={closeOverlays} />
+      )}
+
+      {isConfluenceModalOpen && (
+        <div className="workspace-modal-backdrop" role="dialog" aria-modal="true" aria-label="Save to Confluence">
+          <div className="workspace-modal">
+            <div className="workspace-modal-header">
+              <h3 className="font-display text-xl text-obsidian">Save to Confluence</h3>
+              <button
+                className="icon-chip"
+                onClick={() => setIsConfluenceModalOpen(false)}
+                aria-label="Close save modal"
+              >
+                x
+              </button>
             </div>
 
-            <div className="card p-6" ref={exportRef}>
-              <div className="flex items-center justify-between">
-                <div>
-                  <p className="section-title">Export & Save FSD</p>
-                  <h3 className="font-display text-xl">Share outputs with stakeholders</h3>
-                </div>
-                <button
-                  onClick={handleDownloadDocx}
-                  disabled={loading || results.length === 0}
-                  className="rounded-full bg-signal px-4 py-2 text-xs font-semibold text-white"
+            <div className="workspace-modal-body">
+              <label className="workspace-field">
+                <span>Space</span>
+                <select
+                  value={confluenceSpaceKey}
+                  onChange={(event) => void handleSpaceChange(event.target.value)}
+                  className="workspace-input"
+                  disabled={confluenceLoading}
                 >
-                  Download as Word
-                </button>
-              </div>
-              <div className="mt-4 rounded-3xl border border-obsidian/10 bg-obsidian/5 p-6 text-center">
-                <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-full bg-mint/20 text-2xl">
-                  ?
-                </div>
-                <h4 className="mt-4 text-lg font-semibold">FSD Export Ready</h4>
-                <p className="mt-2 text-sm text-obsidian/60">
-                  Generate and download the executive-ready Word document.
-                </p>
-                <button
-                  onClick={handleDownloadDocx}
-                  disabled={loading || results.length === 0}
-                  className="mt-4 rounded-full bg-obsidian px-6 py-2 text-sm font-semibold text-white"
+                  <option value="">Select a space</option>
+                  {confluenceSpaces.map((space) => (
+                    <option key={space.key} value={space.key}>
+                      {space.name} ({space.key})
+                    </option>
+                  ))}
+                </select>
+              </label>
+
+              <label className="workspace-field">
+                <span>Folder</span>
+                <select
+                  value={confluenceParentId}
+                  onChange={(event) => setConfluenceParentId(event.target.value)}
+                  className="workspace-input"
+                  disabled={confluenceLoading || !confluenceSpaceKey}
                 >
-                  {loading && loadingMode === "download"
-                    ? loadingMessage || "Preparing..."
-                    : "Export Now"}
-                </button>
-              </div>
-              <div className="mt-4 grid gap-2 text-xs text-obsidian/60">
-                <div className="flex items-center justify-between rounded-2xl border border-obsidian/10 bg-white px-4 py-3">
-                  <span>FSD exported successfully</span>
-                  <span>Just now</span>
-                </div>
-                <div className="flex items-center justify-between rounded-2xl border border-obsidian/10 bg-white px-4 py-3">
-                  <span>Baseline snapshot saved</span>
-                  <span>Today</span>
-                </div>
-                <div className="flex items-center justify-between rounded-2xl border border-obsidian/10 bg-white px-4 py-3">
-                  <span>Confluence evidence linked</span>
-                  <span>Today</span>
-                </div>
-              </div>
+                  <option value="">Select a folder</option>
+                  {confluenceFolders.map((folder) => (
+                    <option key={folder.id} value={folder.id}>
+                      {folder.title}
+                    </option>
+                  ))}
+                </select>
+              </label>
+
+              <label className="workspace-field">
+                <span>Filename</span>
+                <input
+                  value={confluenceTitle}
+                  onChange={(event) => {
+                    setConfluenceTitle(event.target.value);
+                    setConfluenceDuplicateWarning("");
+                  }}
+                  className="workspace-input"
+                  placeholder="FSD - Checkout Enhancements"
+                />
+              </label>
+
+              {confluenceDuplicateWarning && (
+                <p className="text-xs font-semibold text-amber">{confluenceDuplicateWarning}</p>
+              )}
+              {confluenceError && <p className="text-xs font-semibold text-rose">{confluenceError}</p>}
+            </div>
+
+            <div className="workspace-modal-actions">
+              <button
+                className="rounded-full border border-obsidian/15 px-4 py-2 text-sm font-semibold text-obsidian/70"
+                onClick={() => setIsConfluenceModalOpen(false)}
+              >
+                Cancel
+              </button>
+              <button
+                className="rounded-full bg-signal px-4 py-2 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-60"
+                disabled={confluenceLoading}
+                onClick={() => void handleConfluenceSave()}
+              >
+                {confluenceLoading ? "Saving..." : "Save"}
+              </button>
             </div>
           </div>
-        </section>
-      </section>
+        </div>
+      )}
+
+      {isHelpOpen && (
+        <div className="workspace-modal-backdrop" role="dialog" aria-modal="true" aria-label="Help instructions">
+          <div className="workspace-modal">
+            <div className="workspace-modal-header">
+              <h3 className="font-display text-xl text-obsidian">Help</h3>
+              <button className="icon-chip" onClick={() => setIsHelpOpen(false)} aria-label="Close help">
+                x
+              </button>
+            </div>
+            <div className="workspace-modal-body">
+              <p className="text-sm text-obsidian/75">
+                Use this workspace to discuss requirements, capture finalized FSD points, and generate
+                export-ready output.
+              </p>
+              <ol className="grid gap-2 text-sm text-obsidian/75">
+                <li>1. Start a thread and discuss requirements with AI in the center panel.</li>
+                <li>2. Use <span className="font-semibold">Add to FSD</span> on useful AI responses.</li>
+                <li>3. Review selected points in the right panel and click <span className="font-semibold">Preview FSD</span>.</li>
+                <li>4. From preview, export the file or save it to Confluence.</li>
+              </ol>
+            </div>
+            <div className="workspace-modal-actions">
+              <button
+                className="rounded-full bg-obsidian px-5 py-2 text-sm font-semibold text-white"
+                onClick={() => setIsHelpOpen(false)}
+              >
+                Got it
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {isOnboardingOpen && (
+        <div
+          className="workspace-modal-backdrop onboarding-backdrop"
+          role="dialog"
+          aria-modal="true"
+          aria-label="Welcome onboarding"
+        >
+          <div className="workspace-modal onboarding-modal">
+            <div className="workspace-modal-header">
+              <h3 className="font-display text-2xl text-obsidian">Welcome to SpecWise</h3>
+            </div>
+            <div className="workspace-modal-body">
+              <p className="text-sm leading-6 text-obsidian/75">
+                This tool helps you discuss project scope with AI, analyze requirement coverage, and
+                produce an FSD-ready output in one flow.
+              </p>
+              <div className="rounded-2xl border border-signal/20 bg-white p-4">
+                <p className="text-xs font-semibold uppercase tracking-[0.14em] text-obsidian/55">
+                  How to use
+                </p>
+                <ol className="mt-3 grid gap-2 text-sm text-obsidian/75">
+                  <li>1. Start a new chat and share your requirement scope.</li>
+                  <li>2. Review AI gap analysis in the main chat and summary panel.</li>
+                  <li>3. Export FSD or save to Confluence when finalized.</li>
+                </ol>
+              </div>
+            </div>
+            <div className="workspace-modal-actions">
+              <button
+                className="rounded-full bg-obsidian px-5 py-2 text-sm font-semibold text-white"
+                onClick={() => setIsOnboardingOpen(false)}
+              >
+                Start Brainstorming
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      <footer className="workspace-footer" aria-label="Footer links">
+        <span>© {new Date().getFullYear()} OSF Digital. All rights reserved.</span>
+        <div className="workspace-footer-links">
+          <a href="#" className="workspace-footer-link">
+            Terms & Conditions
+          </a>
+          <a href="#" className="workspace-footer-link">
+            Privacy
+          </a>
+          <a href="#" className="workspace-footer-link">
+            Contact
+          </a>
+        </div>
+      </footer>
     </main>
   );
 }

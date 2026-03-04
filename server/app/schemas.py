@@ -87,3 +87,37 @@ class QueryResponse(BaseModel):
     question: str
     top_k: int
     results: list[ChunkResult]
+
+
+class ConfluenceSpace(BaseModel):
+    key: str
+    name: str
+
+
+class ConfluenceFolder(BaseModel):
+    id: str
+    title: str
+
+
+class ConfluenceDuplicateCheckRequest(BaseModel):
+    space_key: str
+    parent_id: str
+    title: str
+
+
+class ConfluenceDuplicateCheckResponse(BaseModel):
+    exists: bool
+    page_id: Optional[str] = None
+
+
+class ConfluenceSaveRequest(BaseModel):
+    space_key: str
+    parent_id: str
+    title: str
+    gap_results: list[dict]
+
+
+class ConfluenceSaveResponse(BaseModel):
+    page_id: str
+    title: str
+    url: str

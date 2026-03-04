@@ -5,8 +5,17 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 
 import io
+import html
 
-from .confluence import fetch_page, page_to_text, search_pages
+from .confluence import (
+    create_child_page,
+    fetch_page,
+    find_child_page,
+    list_folder_pages,
+    list_spaces,
+    page_to_text,
+    search_pages,
+)
 from .ingest import IngestDocument, upsert_document_chunks
 
 from .chroma_service import ChromaService
@@ -33,6 +42,12 @@ from .schemas import (
     QueryRequest,
     QueryResponse,
     ChunkResult,
+    ConfluenceSpace,
+    ConfluenceFolder,
+    ConfluenceDuplicateCheckRequest,
+    ConfluenceDuplicateCheckResponse,
+    ConfluenceSaveRequest,
+    ConfluenceSaveResponse,
 )
 from .baseline_store import compare_to_baseline, load_baseline, save_baseline
 
@@ -213,3 +228,69 @@ def ingest_confluence():
         total_chunks += upsert_document_chunks(chroma, doc, task_type="retrieval_document")
 
     return {"pages": len(page_ids), "chunks": total_chunks}
+
+
+@app.get("/confluence/spaces", response_model=list[ConfluenceSpace])
+def confluence_spaces():
+    try:
+        spaces = list_spaces()
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Failed to fetch Confluence spaces: {exc}") from exc
+    return [ConfluenceSpace(key=item.key, name=item.name) for item in spaces]
+
+
+@app.get("/confluence/folders/{space_key}", response_model=list[ConfluenceFolder])
+def confluence_folders(space_key: str):
+    clean_space = space_key.strip()
+    if not clean_space:
+        raise HTTPException(status_code=400, detail="space_key is required")
+    try:
+        folders = list_folder_pages(clean_space)
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Failed to fetch Confluence folders: {exc}") from exc
+    return [ConfluenceFolder(id=item.page_id, title=item.title) for item in folders]
+
+
+@app.post("/confluence/check-duplicate", response_model=ConfluenceDuplicateCheckResponse)
+def confluence_check_duplicate(payload: ConfluenceDuplicateCheckRequest):
+    if not payload.space_key.strip() or not payload.parent_id.strip() or not payload.title.strip():
+        raise HTTPException(status_code=400, detail="space_key, parent_id, and title are required")
+    try:
+        existing = find_child_page(payload.space_key.strip(), payload.parent_id.strip(), payload.title.strip())
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Failed duplicate check in Confluence: {exc}") from exc
+    if not existing:
+        return ConfluenceDuplicateCheckResponse(exists=False)
+    return ConfluenceDuplicateCheckResponse(exists=True, page_id=existing.page_id)
+
+
+@app.post("/confluence/save-fsd", response_model=ConfluenceSaveResponse)
+def confluence_save_fsd(payload: ConfluenceSaveRequest):
+    space_key = payload.space_key.strip()
+    parent_id = payload.parent_id.strip()
+    title = payload.title.strip()
+    if not space_key or not parent_id or not title:
+        raise HTTPException(status_code=400, detail="space_key, parent_id, and title are required")
+    if not payload.gap_results:
+        raise HTTPException(status_code=400, detail="gap_results is required")
+
+    try:
+        existing = find_child_page(space_key, parent_id, title)
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Failed duplicate check in Confluence: {exc}") from exc
+
+    if existing:
+        raise HTTPException(status_code=409, detail="A Confluence page with this title already exists in selected folder")
+
+    fsd_json = generate_fsd_json(payload.gap_results)
+    fsd_text = render_fsd_text(fsd_json)
+    html_lines = [line.strip() for line in fsd_text.splitlines() if line.strip()]
+    body = "".join(f"<p>{html.escape(line)}</p>" for line in html_lines)
+    storage_html = f"<h1>{html.escape(title)}</h1>{body}"
+
+    try:
+        created = create_child_page(space_key, parent_id, title, storage_html)
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Failed to save page in Confluence: {exc}") from exc
+
+    return ConfluenceSaveResponse(page_id=created.page_id, title=created.title, url=created.url)

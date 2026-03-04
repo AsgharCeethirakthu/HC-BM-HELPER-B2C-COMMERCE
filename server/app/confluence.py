@@ -21,6 +21,18 @@ class ConfluencePage:
     storage_value: str
 
 
+@dataclass
+class ConfluenceSpaceInfo:
+    key: str
+    name: str
+
+
+@dataclass
+class ConfluenceFolderInfo:
+    page_id: str
+    title: str
+
+
 def _client() -> httpx.Client:
     return httpx.Client(
         base_url=settings.confluence_base_url.rstrip("/"),
@@ -105,3 +117,94 @@ def fetch_page(page_id: str) -> ConfluencePage:
 
 def page_to_text(page: ConfluencePage) -> str:
     return _storage_to_text(page.storage_value)
+
+
+def list_spaces() -> list[ConfluenceSpaceInfo]:
+    spaces: list[ConfluenceSpaceInfo] = []
+    start = 0
+    limit = 100
+    with _client() as client:
+        while True:
+            response = client.get("/rest/api/space", params={"limit": limit, "start": start})
+            response.raise_for_status()
+            payload = response.json()
+            results = payload.get("results", [])
+            for item in results:
+                key = str(item.get("key", "")).strip()
+                if not key:
+                    continue
+                name = str(item.get("name", key)).strip() or key
+                spaces.append(ConfluenceSpaceInfo(key=key, name=name))
+            if len(results) < limit:
+                break
+            start += limit
+    spaces.sort(key=lambda s: s.name.lower())
+    return spaces
+
+
+def list_folder_pages(space_key: str) -> list[ConfluenceFolderInfo]:
+    folders: list[ConfluenceFolderInfo] = []
+    with _client() as client:
+        response = client.get(
+            "/rest/api/content/search",
+            params={
+                "cql": f'space="{space_key}" AND type=page ORDER BY title',
+                "limit": 200,
+            },
+        )
+        response.raise_for_status()
+        payload = response.json()
+        for item in payload.get("results", []):
+            page_id = str(item.get("id", "")).strip()
+            title = str(item.get("title", "")).strip()
+            if not page_id or not title:
+                continue
+            folders.append(ConfluenceFolderInfo(page_id=page_id, title=title))
+    return folders
+
+
+def find_child_page(space_key: str, parent_id: str, title: str) -> Optional[ConfluenceFolderInfo]:
+    clean_title = title.replace('"', '\\"').strip()
+    if not clean_title:
+        return None
+    with _client() as client:
+        response = client.get(
+            "/rest/api/content/search",
+            params={
+                "cql": f'space="{space_key}" AND title="{clean_title}" AND ancestor={parent_id}',
+                "limit": 1,
+            },
+        )
+        response.raise_for_status()
+        payload = response.json()
+        results = payload.get("results", [])
+        if not results:
+            return None
+        item = results[0]
+        return ConfluenceFolderInfo(page_id=str(item.get("id", "")), title=str(item.get("title", "")))
+
+
+def create_child_page(space_key: str, parent_id: str, title: str, storage_html: str) -> ConfluencePage:
+    payload = {
+        "type": "page",
+        "title": title,
+        "space": {"key": space_key},
+        "ancestors": [{"id": str(parent_id)}],
+        "body": {"storage": {"value": storage_html, "representation": "storage"}},
+    }
+
+    with _client() as client:
+        response = client.post("/rest/api/content", json=payload)
+        response.raise_for_status()
+        data = response.json()
+
+    webui = data.get("_links", {}).get("webui", "")
+    base = data.get("_links", {}).get("base", "")
+    return ConfluencePage(
+        page_id=str(data.get("id", "")),
+        title=str(data.get("title", title)),
+        url=f"{base}{webui}",
+        space_key=space_key,
+        updated_at=None,
+        storage_value=storage_html,
+    )
