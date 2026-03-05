@@ -76,10 +76,24 @@ app.add_middleware(
 
 def fsd_text_to_confluence_html(title: str, fsd_text: str) -> str:
     body_parts: list[str] = []
+    in_toc_section = False
+    inserted_toc_macro = False
     for raw_line in fsd_text.splitlines():
         line = raw_line.strip()
         if not line:
             continue
+        if line.lower() in {"table of contents", "# table of contents"}:
+            if not inserted_toc_macro:
+                body_parts.append('<ac:structured-macro ac:name="toc"><ac:parameter ac:name="maxLevel">3</ac:parameter></ac:structured-macro>')
+                inserted_toc_macro = True
+            in_toc_section = True
+            continue
+        if in_toc_section:
+            # Skip markdown TOC lines; Confluence TOC macro renders real heading links.
+            if line.startswith("#"):
+                in_toc_section = False
+            else:
+                continue
         if line.startswith("#"):
             level = min(3, len(line) - len(line.lstrip("#")))
             heading = html.escape(line.lstrip("#").strip())
