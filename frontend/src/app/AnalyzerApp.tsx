@@ -1006,10 +1006,9 @@ export default function AnalyzerApp() {
           >
             ?
           </button>
-          <div className="h-10 w-10 rounded-2xl bg-gradient-to-br from-signal to-mint" />
-          <div>
-            <p className="text-sm font-semibold text-obsidian/70">SFRA AI Agent</p>
-            <p className="text-lg font-semibold">Requirements Intelligence</p>
+          <div className="workspace-brand" aria-label="SCOUT - SFRA AI Agent Requirements Intelligence">
+            <img src="/scout-logo.png" alt="SCOUT" className="workspace-brand-logo" />
+            <span className="sr-only">SFRA AI Agent Requirements Intelligence</span>
           </div>
         </div>
 
@@ -1104,6 +1103,9 @@ export default function AnalyzerApp() {
         >
           {isHistoryCollapsed && (
             <div className="history-collapsed-only hidden lg:flex">
+              <span className="history-collapsed-label" aria-hidden="true">
+                THREADS
+              </span>
               <button
                 className="history-expand-fab"
                 onClick={() => setIsHistoryCollapsed(false)}
@@ -1119,7 +1121,9 @@ export default function AnalyzerApp() {
           <div className={`history-content ${isHistoryCollapsed ? "lg:hidden" : ""}`}>
             <div className="history-header">
               <div className="flex w-full items-center justify-between gap-2">
-                <h2 className="section-title !tracking-[0.2em]">Threads</h2>
+                <h2 className={`section-title !tracking-[0.2em] ${!isHistoryCollapsed ? "threads-fall-in" : ""}`}>
+                  Threads
+                </h2>
                 <button
                   className="rounded-full border border-obsidian/15 bg-white px-2.5 py-1 text-[0.68rem] font-semibold text-obsidian/70"
                   onClick={startNewThread}
@@ -1419,7 +1423,14 @@ export default function AnalyzerApp() {
                       }`}
                     >
                       <div className="chat-meta">
-                        <span>{message.role === "user" ? "You" : "AI Analyst"}</span>
+                        {message.role === "user" ? (
+                          <span>You</span>
+                        ) : (
+                          <span className="chat-author">
+                            <img src="/scout-icon.png" alt="" className="chat-author-icon" aria-hidden="true" />
+                            <span>AI Analyst</span>
+                          </span>
+                        )}
                         <span>{formatTime(message.createdAt)}</span>
                       </div>
                       <p className="chat-text">{message.text}</p>
@@ -1536,7 +1547,10 @@ export default function AnalyzerApp() {
                 {isChatAnalyzing && (
                   <article className="chat-bubble assistant">
                     <div className="chat-meta">
-                      <span>AI Analyst</span>
+                      <span className="chat-author">
+                        <img src="/scout-icon.png" alt="" className="chat-author-icon" aria-hidden="true" />
+                        <span>AI Analyst</span>
+                      </span>
                     </div>
                     <div className="ai-loader-row">
                       <span className="ai-loader-icon" aria-hidden="true" />
@@ -1904,7 +1918,7 @@ export default function AnalyzerApp() {
         >
           <div className="workspace-modal onboarding-modal">
             <div className="workspace-modal-header">
-              <h3 className="font-display text-2xl text-obsidian">Welcome to SpecWise</h3>
+              <h3 className="font-display text-2xl text-obsidian">Welcome to Scout!</h3>
             </div>
             <div className="workspace-modal-body">
               <p className="text-sm leading-6 text-obsidian/75">
