@@ -50,6 +50,30 @@ class AnalyzeResponse(BaseModel):
     baseline_removed: Optional[list[BaselineRemovedItem]] = None
 
 
+class FollowupHistoryItem(BaseModel):
+    question: str
+    answer: str
+
+
+class FollowupStepRequest(BaseModel):
+    requirement: str
+    history: list[FollowupHistoryItem] = Field(default_factory=list)
+    step_index: int = Field(default=0, ge=0)
+    max_steps: int = Field(default=3, ge=1, le=5)
+
+
+class FollowupStepOption(BaseModel):
+    label: str
+    recommended: bool = False
+
+
+class FollowupStepResponse(BaseModel):
+    question: str
+    options: list[FollowupStepOption]
+    allow_custom: bool = True
+    is_terminal: bool = False
+
+
 class GenerateFsdRequest(BaseModel):
     gap_results: list[dict]
 

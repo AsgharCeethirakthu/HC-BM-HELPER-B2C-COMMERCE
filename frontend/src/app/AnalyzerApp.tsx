@@ -6,10 +6,12 @@ import MDEditor from "@uiw/react-md-editor";
 import {
   ConfluenceFolder,
   ConfluenceSpace,
+  FollowupStepOption,
+  FollowupStepResponse,
   GapResult,
-  analyzeRequirementsText,
   analyzeSingleRequirement,
   checkConfluenceDuplicate,
+  fetchFollowupStep,
   fetchConfluenceFolders,
   fetchConfluenceSpaces,
   generateFsd,
@@ -38,18 +40,40 @@ type FsdSidebarItem = {
   classifications: string[];
 };
 
-type FollowUpContext = {
-  baseRequirement: string;
-  qa: Array<{ question: string; answer: string }>;
-};
-
 type ChatMessage = {
   id: string;
   role: "user" | "assistant";
   createdAt: string;
   text: string;
+  kind?: "normal" | "guided_prompt" | "guided_answer" | "analysis_result";
+  cycleId?: string;
+  detailedResult?: {
+    classification: string;
+    why: string;
+    confidence: number;
+    references: Array<{ title: string; url: string }>;
+    finalRequirement: string;
+  };
   attachments?: AttachmentMeta[];
   analysisResults?: GapResult[];
+};
+
+type GuidedAnswer = {
+  question: string;
+  answer: string;
+  source: "option" | "custom";
+};
+
+type GuidedCycle = {
+  id: string;
+  baseRequirement: string;
+  status: "guided" | "analyzing" | "analyzed" | "cancelled";
+  currentStepIndex: number;
+  maxSteps: number;
+  currentQuestion?: string;
+  currentOptions?: FollowupStepOption[];
+  answers: GuidedAnswer[];
+  isTerminal?: boolean;
 };
 
 type ChatThread = {
@@ -72,57 +96,40 @@ const STARTER_PROMPTS = [
   "Add checkout address validation with clear error handling requirements.",
 ];
 
-const DOMAIN_HINTS = [
-  "checkout",
-  "payment",
-  "cart",
-  "homepage",
-  "home page",
-  "pdp",
-  "plp",
-  "product",
-  "recommendation",
-  "carousel",
-  "sfra",
-  "api",
-  "field",
-  "dropdown",
-  "validation",
-  "integration",
-  "promotion",
-  "shipping",
-  "address",
-  "profile",
-  "order",
+const GUIDED_MAX_STEPS = 3;
+
+const FALLBACK_GUIDED_STEPS: FollowupStepResponse[] = [
+  {
+    question: "What exact scope and page context should this requirement apply to?",
+    options: [
+      { label: "Homepage module only", recommended: true },
+      { label: "PLP/PDP and homepage consistency", recommended: false },
+      { label: "Site-wide reusable component", recommended: false },
+    ],
+    allow_custom: true,
+    is_terminal: false,
+  },
+  {
+    question: "What behavior or rule should be strictly enforced?",
+    options: [
+      { label: "Business Manager configurable behavior", recommended: true },
+      { label: "Hardcoded implementation for launch speed", recommended: false },
+      { label: "Configurable + validation safeguards", recommended: false },
+    ],
+    allow_custom: true,
+    is_terminal: false,
+  },
+  {
+    question: "What data source and acceptance criteria should drive this requirement?",
+    options: [
+      { label: "Use existing SFRA/OOTB source first", recommended: true },
+      { label: "Use external/custom API integration", recommended: false },
+      { label: "Need both OOTB and project-specific FSD mapping", recommended: false },
+    ],
+    allow_custom: true,
+    is_terminal: true,
+  },
 ];
-
-const looksVague = (text: string) => {
-  const normalized = text.toLowerCase().trim();
-  if (!normalized) return true;
-  const words = normalized.split(/\s+/).filter(Boolean);
-  if (words.length < 3) return true;
-
-  const vaguePatterns = [
-    /\b(add|do|create|update|change|fix|implement|improve)\b\s+(something|it|this|that|feature|page|stuff)\b/,
-    /\b(make it|do it|handle it)\b/,
-    /\b(add|update|change)\b$/,
-  ];
-  if (vaguePatterns.some((pattern) => pattern.test(normalized))) return true;
-
-  const hasDomainHint = DOMAIN_HINTS.some((hint) => normalized.includes(hint));
-  const hasLocationOrScope = /\b(in|on|for|within)\b/.test(normalized);
-  if (!hasDomainHint && !hasLocationOrScope && words.length < 6) return true;
-  return false;
-};
-
-const clarificationMessage = () =>
-  [
-    "I need a bit more context before running analysis.",
-    "Please clarify:",
-    "1. What exact feature or page should be changed?",
-    "2. What behavior should happen (and any validations/rules)?",
-    "3. Any data source, integration, or acceptance criteria?",
-  ].join("\n");
 
 const parseFollowUpReplyText = (text: string) => {
   const marker = "Reply to follow-up:";
@@ -142,43 +149,6 @@ const ensureSentence = (text: string) => {
   return /[.!?]$/.test(trimmed) ? trimmed : `${trimmed}.`;
 };
 
-const followUpQaToNarrative = (question: string, answer: string) => {
-  const q = question.toLowerCase();
-  const a = answer.trim().replace(/\s+/g, " ");
-  if (!a) return "";
-  if ((q.includes("number of products") || q.includes("how many products")) && q.includes("carousel")) {
-    return ensureSentence(`The carousel should display ${a} products`);
-  }
-  if (q.includes("design style") && q.includes("carousel")) {
-    return ensureSentence(`The preferred carousel design style is ${a}`);
-  }
-  if (q.includes("metrics") || q.includes("criteria")) {
-    return ensureSentence(`Success criteria should be ${a}`);
-  }
-  if (q.includes("master product")) {
-    return ensureSentence(`Only master products should be selected: ${a}`);
-  }
-  if (q.includes("business manager") || q.includes("page designer") || q.includes("configurable")) {
-    return ensureSentence(`Configuration should be available in ${a}`);
-  }
-  if (q.includes("format") || q.includes("jpeg") || q.includes("png") || q.includes("svg") || q.includes("image type")) {
-    return ensureSentence(`Supported image formats should include ${a}`);
-  }
-  if (a.toLowerCase().startsWith("must ") || a.toLowerCase().startsWith("should ")) {
-    return ensureSentence(a);
-  }
-  return ensureSentence(`Additional clarification: ${a}`);
-};
-
-const buildFollowUpRequirementText = (baseRequirement: string, qa: Array<{ question: string; answer: string }>) => {
-  const requirementSentence = ensureSentence(baseRequirement.trim());
-  const contextLines = qa
-    .map((item) => followUpQaToNarrative(item.question, item.answer))
-    .filter(Boolean)
-    .join(" ");
-  return [`Requirement: ${requirementSentence}`, contextLines].filter(Boolean).join(" ");
-};
-
 const cleanRequirementText = (text: string) => text.replace(/^Requirement:\s*/i, "").trim();
 
 const splitRequirementContext = (text: string) => {
@@ -192,6 +162,22 @@ const splitRequirementContext = (text: string) => {
     return { primary: cleaned, extras: [] as string[] };
   }
   return { primary: sentences[0], extras: sentences.slice(1) };
+};
+
+const buildConsolidatedRequirementText = (baseRequirement: string, answers: GuidedAnswer[]) => {
+  const lines = [`Requirement: ${ensureSentence(baseRequirement)}`];
+  if (answers.length) {
+    lines.push("Clarifications:");
+    answers.forEach((entry, index) => {
+      lines.push(`Q${index + 1}: ${entry.question}`);
+      lines.push(`A${index + 1}: ${entry.answer}`);
+    });
+  }
+  const summary = answers.map((entry) => entry.answer.trim()).filter(Boolean).join(" ");
+  if (summary) {
+    lines.push(`Final context summary: ${summary}`);
+  }
+  return lines.join("\n");
 };
 
 const formatTime = (iso: string) =>
@@ -341,13 +327,10 @@ export default function AnalyzerApp() {
   const [pendingDeleteThreadId, setPendingDeleteThreadId] = useState<string | null>(null);
   const [deletingThreadId, setDeletingThreadId] = useState<string | null>(null);
   const [introAnimationThreadId, setIntroAnimationThreadId] = useState<string | null>(null);
-  const [selectedFollowUpQuestion, setSelectedFollowUpQuestion] = useState<{
-    question: string;
-    baseRequirement: string;
-  } | null>(null);
-  const [followUpContextByThread, setFollowUpContextByThread] = useState<
-    Record<string, FollowUpContext>
-  >({});
+  const [guidedCycleByThread, setGuidedCycleByThread] = useState<Record<string, GuidedCycle | null>>({});
+  const [guidedCustomDraft, setGuidedCustomDraft] = useState("");
+  const [guidedLoading, setGuidedLoading] = useState(false);
+  const [selectedGuidedOption, setSelectedGuidedOption] = useState<string>("");
   const [recentlyAddedToSidebar, setRecentlyAddedToSidebar] = useState<{
     threadId: string;
     messageId: string;
@@ -380,6 +363,11 @@ export default function AnalyzerApp() {
     if (msgs.length !== 1) return false;
     return msgs[0].role === "assistant" && !msgs[0].analysisResults?.length;
   }, [activeThread]);
+
+  const activeGuidedCycle = useMemo(
+    () => (activeThread ? guidedCycleByThread[activeThread.id] || null : null),
+    [guidedCycleByThread, activeThread]
+  );
 
   const activeFsdSelections = useMemo(
     () => fsdSelectionsByThread[activeThreadId] || [],
@@ -430,6 +418,12 @@ export default function AnalyzerApp() {
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
+        if (activeThread && activeGuidedCycle?.status === "guided") {
+          setGuidedCycleByThread((prev) => ({
+            ...prev,
+            [activeThread.id]: { ...activeGuidedCycle, status: "cancelled" },
+          }));
+        }
         closeOverlays();
         setIsConfluenceModalOpen(false);
         setIsOnboardingOpen(false);
@@ -438,7 +432,7 @@ export default function AnalyzerApp() {
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, []);
+  }, [activeGuidedCycle, activeThread]);
 
   useEffect(() => {
     chatScrollRef.current?.scrollTo({ top: chatScrollRef.current.scrollHeight, behavior: "smooth" });
@@ -540,6 +534,8 @@ export default function AnalyzerApp() {
     setComposer("");
     setAttachments([]);
     setError("");
+    setGuidedCustomDraft("");
+    setSelectedGuidedOption("");
     closeOverlays();
     window.setTimeout(() => {
       setIntroAnimationThreadId((current) => (current === thread.id ? null : current));
@@ -588,9 +584,6 @@ export default function AnalyzerApp() {
       setRenamingThreadId(null);
       setRenameDraft("");
     }
-    if (activeThreadId === threadId) {
-      setSelectedFollowUpQuestion(null);
-    }
   };
 
   const handleConfirmDeleteThread = (threadId: string) => {
@@ -603,7 +596,7 @@ export default function AnalyzerApp() {
         delete next[threadId];
         return next;
       });
-      setFollowUpContextByThread((prev) => {
+      setGuidedCycleByThread((prev) => {
         const next = { ...prev };
         delete next[threadId];
         return next;
@@ -710,16 +703,53 @@ export default function AnalyzerApp() {
     setAttachments((prev) => prev.filter((item) => item.id !== id));
   };
 
-  const submitDiscussion = async (
-    scopeTextInput: string,
-    messageAttachments: AttachmentMeta[],
-    forceAnalyze = false,
-    singleRequirementMode = false,
-    analysisTextOverride?: string
-  ) => {
+  const patchGuidedCycle = (threadId: string, updater: (cycle: GuidedCycle | null) => GuidedCycle | null) => {
+    setGuidedCycleByThread((prev) => ({ ...prev, [threadId]: updater(prev[threadId] || null) }));
+  };
+
+  const loadGuidedStep = async (threadId: string, cycle: GuidedCycle, stepIndex: number) => {
+    setGuidedLoading(true);
+    try {
+      const step = await fetchFollowupStep(
+        cycle.baseRequirement,
+        cycle.answers.map((item) => ({ question: item.question, answer: item.answer })),
+        stepIndex,
+        cycle.maxSteps
+      );
+      patchGuidedCycle(threadId, (current) =>
+        current && current.id === cycle.id
+          ? {
+              ...current,
+              currentStepIndex: stepIndex,
+              currentQuestion: step.question,
+              currentOptions: step.options,
+              isTerminal: step.is_terminal,
+              status: "guided",
+            }
+          : current
+      );
+    } catch {
+      const fallback = FALLBACK_GUIDED_STEPS[Math.min(stepIndex, FALLBACK_GUIDED_STEPS.length - 1)];
+      patchGuidedCycle(threadId, (current) =>
+        current && current.id === cycle.id
+          ? {
+              ...current,
+              currentStepIndex: stepIndex,
+              currentQuestion: fallback.question,
+              currentOptions: fallback.options,
+              isTerminal: stepIndex >= cycle.maxSteps - 1,
+              status: "guided",
+            }
+          : current
+      );
+    } finally {
+      setGuidedLoading(false);
+    }
+  };
+
+  const startGuidedCycle = async (scopeTextInput: string, messageAttachments: AttachmentMeta[]) => {
     if (!activeThread) return;
     const scopeText = scopeTextInput.trim();
-    const analysisText = (analysisTextOverride ?? scopeTextInput).trim();
     if (!scopeText && messageAttachments.length === 0) return;
 
     setError("");
@@ -729,11 +759,11 @@ export default function AnalyzerApp() {
     const userMessage: ChatMessage = {
       id: crypto.randomUUID(),
       role: "user",
+      kind: "normal",
       createdAt: now,
       text: scopeText || "Uploaded context files",
       attachments: messageAttachments.length ? messageAttachments : undefined,
     };
-
     setThreadMessages(activeThread.id, (messages) => [...messages, userMessage]);
 
     if (activeThread.messages.length <= 1 && scopeText) {
@@ -746,37 +776,128 @@ export default function AnalyzerApp() {
       );
     }
 
-    if (!forceAnalyze && (!analysisText || looksVague(analysisText))) {
-      const followUpMessage: ChatMessage = {
-        id: crypto.randomUUID(),
-        role: "assistant",
-        createdAt: new Date().toISOString(),
-        text: clarificationMessage(),
-      };
-      setThreadMessages(activeThread.id, (messages) => [...messages, followUpMessage]);
+    const cycle: GuidedCycle = {
+      id: crypto.randomUUID(),
+      baseRequirement: scopeText || "Requirement context from uploaded files",
+      status: "guided",
+      currentStepIndex: 0,
+      maxSteps: GUIDED_MAX_STEPS,
+      answers: [],
+      currentQuestion: undefined,
+      currentOptions: [],
+      isTerminal: false,
+    };
+    patchGuidedCycle(activeThread.id, () => cycle);
+    setGuidedCustomDraft("");
+    setSelectedGuidedOption("");
+    await loadGuidedStep(activeThread.id, cycle, 0);
+  };
+
+  const handleGuidedNext = async () => {
+    if (!activeThread || !activeGuidedCycle || activeGuidedCycle.status !== "guided") return;
+    const chosen = selectedGuidedOption.trim();
+    const custom = guidedCustomDraft.trim();
+    const answerText = custom || chosen;
+    if (!answerText) {
+      setError("Select an option or enter custom input before moving to next step.");
       return;
     }
 
+    const questionText = activeGuidedCycle.currentQuestion || `Follow-up ${activeGuidedCycle.currentStepIndex + 1}`;
+    const answer: GuidedAnswer = {
+      question: questionText,
+      answer: answerText,
+      source: custom ? "custom" : "option",
+    };
+
+    const nextAnswers = [...activeGuidedCycle.answers, answer];
+    setThreadMessages(activeThread.id, (messages) => [
+      ...messages,
+      {
+        id: crypto.randomUUID(),
+        role: "user",
+        kind: "guided_answer",
+        cycleId: activeGuidedCycle.id,
+        createdAt: new Date().toISOString(),
+        text: `Clarification: ${answer.question}\n${answer.answer}`,
+      },
+    ]);
+
+    patchGuidedCycle(activeThread.id, (current) =>
+      current && current.id === activeGuidedCycle.id ? { ...current, answers: nextAnswers } : current
+    );
+    setGuidedCustomDraft("");
+    setSelectedGuidedOption("");
+
+    const nextStep = activeGuidedCycle.currentStepIndex + 1;
+    if (nextStep >= activeGuidedCycle.maxSteps || activeGuidedCycle.isTerminal) {
+      patchGuidedCycle(activeThread.id, (current) =>
+        current && current.id === activeGuidedCycle.id
+          ? { ...current, answers: nextAnswers, isTerminal: true, currentQuestion: undefined, currentOptions: [] }
+          : current
+      );
+      return;
+    }
+
+    await loadGuidedStep(
+      activeThread.id,
+      {
+        ...activeGuidedCycle,
+        answers: nextAnswers,
+      },
+      nextStep
+    );
+  };
+
+  const handleDismissGuided = () => {
+    if (!activeThread || !activeGuidedCycle) return;
+    patchGuidedCycle(activeThread.id, (current) =>
+      current && current.id === activeGuidedCycle.id ? { ...current, status: "cancelled" } : current
+    );
+    setSelectedGuidedOption("");
+    setGuidedCustomDraft("");
+  };
+
+  const handleAnalyzeNow = async () => {
+    if (!activeThread || !activeGuidedCycle) return;
+    const consolidated = buildConsolidatedRequirementText(activeGuidedCycle.baseRequirement, activeGuidedCycle.answers);
+
+    patchGuidedCycle(activeThread.id, (current) =>
+      current && current.id === activeGuidedCycle.id ? { ...current, status: "analyzing" } : current
+    );
     setLoading(true);
     setIsChatAnalyzing(true);
+    setError("");
+    setActionNotice("");
 
     try {
-      const payload = singleRequirementMode
-        ? await analyzeSingleRequirement(analysisText)
-        : await analyzeRequirementsText(analysisText);
-      const counts = statusCounts(payload.results);
-      const total = counts.total || 1;
-      const summaryText = `Analyzed ${counts.total} requirements: ${counts.ootb} OOTB (${Math.round((counts.ootb / total) * 100)}%), ${counts.partial} partial (${Math.round((counts.partial / total) * 100)}%), ${counts.custom} custom dev required (${Math.round((counts.custom / total) * 100)}%), ${counts.open} open (${Math.round((counts.open / total) * 100)}%).`;
-
-      const assistantMessage: ChatMessage = {
+      const payload = await analyzeSingleRequirement(consolidated);
+      const primary = payload.results[0];
+      const references = primary ? getSources(primary).slice(0, 3) : [];
+      const detailedMessage: ChatMessage = {
         id: crypto.randomUUID(),
         role: "assistant",
+        kind: "analysis_result",
+        cycleId: activeGuidedCycle.id,
         createdAt: new Date().toISOString(),
-        text: summaryText,
+        text: primary?.rationale || "Analysis completed.",
         analysisResults: payload.results,
+        detailedResult: primary
+          ? {
+              classification: primary.classification,
+              why: primary.rationale,
+              confidence: primary.confidence,
+              references,
+              finalRequirement: consolidated,
+            }
+          : undefined,
       };
-
-      setThreadMessages(activeThread.id, (messages) => [...messages, assistantMessage]);
+      setThreadMessages(activeThread.id, (messages) => [...messages, detailedMessage]);
+      patchGuidedCycle(activeThread.id, (current) =>
+        current && current.id === activeGuidedCycle.id ? { ...current, status: "analyzed" } : current
+      );
+      setGuidedCustomDraft("");
+      setSelectedGuidedOption("");
     } catch (err) {
       const message = err instanceof Error ? err.message : "Something went wrong.";
       setError(message);
@@ -789,6 +910,9 @@ export default function AnalyzerApp() {
           text: `I could not run analysis: ${message}`,
         },
       ]);
+      patchGuidedCycle(activeThread.id, (current) =>
+        current && current.id === activeGuidedCycle.id ? { ...current, status: "guided" } : current
+      );
     } finally {
       setLoading(false);
       setIsChatAnalyzing(false);
@@ -796,43 +920,15 @@ export default function AnalyzerApp() {
   };
 
   const handleSend = async () => {
-    const messageAttachments = attachments;
-    const typedAnswer = composer.trim();
-
-    if (selectedFollowUpQuestion) {
-      if (!typedAnswer) {
-        setError("Add your response to the selected follow-up question before sending.");
-        return;
-      }
-      if (!activeThread) return;
-      const existing = followUpContextByThread[activeThread.id];
-      const baseRequirement =
-        existing?.baseRequirement || selectedFollowUpQuestion.baseRequirement || "Requirement context";
-      const nextQa = [...(existing?.qa || []), { question: selectedFollowUpQuestion.question, answer: typedAnswer }];
-      const combinedContext = buildFollowUpRequirementText(baseRequirement, nextQa);
-      const displayText = `Reply to follow-up: ${selectedFollowUpQuestion.question}\n${typedAnswer}`;
-
-      setFollowUpContextByThread((prev) => ({
-        ...prev,
-        [activeThread.id]: { baseRequirement, qa: nextQa },
-      }));
-      setComposer("");
-      setAttachments([]);
-      setSelectedFollowUpQuestion(null);
-      await submitDiscussion(displayText, messageAttachments, true, true, combinedContext);
+    if (activeGuidedCycle && activeGuidedCycle.status === "guided") {
+      setError("Use the guided follow-up card to continue, or click Analyze now.");
       return;
     }
-
+    const messageAttachments = attachments;
     const scopeText = composer;
     setComposer("");
     setAttachments([]);
-    await submitDiscussion(scopeText, messageAttachments);
-  };
-
-  const handleFollowUpQuestionSelect = (question: string, baseRequirement: string) => {
-    setSelectedFollowUpQuestion({ question, baseRequirement });
-    setError("");
-    window.setTimeout(() => composerRef.current?.focus(), 0);
+    await startGuidedCycle(scopeText, messageAttachments);
   };
 
   const handleExportDocx = async () => {
@@ -1472,6 +1568,83 @@ export default function AnalyzerApp() {
                     </div>
                   </div>
                 )}
+                {activeGuidedCycle &&
+                  (activeGuidedCycle.status === "guided" || activeGuidedCycle.status === "cancelled") && (
+                    <div className="guided-card">
+                      <div className="guided-card-head">
+                        <p className="guided-kicker">
+                          Guided Follow-up • Step{" "}
+                          {Math.min(activeGuidedCycle.currentStepIndex + 1, activeGuidedCycle.maxSteps)} of{" "}
+                          {activeGuidedCycle.maxSteps}
+                        </p>
+                        <button className="guided-dismiss" onClick={handleDismissGuided}>
+                          Dismiss (Esc)
+                        </button>
+                      </div>
+                      {activeGuidedCycle.status === "cancelled" ? (
+                        <p className="guided-cancel-note">
+                          Guided questions were dismissed. You can still analyze using collected context.
+                        </p>
+                      ) : (
+                        <>
+                          <p className="guided-question">
+                            {activeGuidedCycle.currentQuestion || "Loading follow-up question..."}
+                          </p>
+                          <div className="guided-options">
+                            {(activeGuidedCycle.currentOptions || []).map((option, idx) => (
+                              <button
+                                key={`${option.label}-${idx}`}
+                                className={`guided-option ${selectedGuidedOption === option.label ? "selected" : ""}`}
+                                onClick={() => {
+                                  setSelectedGuidedOption(option.label);
+                                  setGuidedCustomDraft("");
+                                }}
+                                disabled={guidedLoading}
+                              >
+                                <span>{option.label}</span>
+                                {option.recommended && <span className="guided-badge">Recommended</span>}
+                              </button>
+                            ))}
+                          </div>
+                          <div className="guided-custom-row">
+                            <input
+                              value={guidedCustomDraft}
+                              onChange={(event) => {
+                                setGuidedCustomDraft(event.target.value);
+                                if (event.target.value.trim()) setSelectedGuidedOption("");
+                              }}
+                              placeholder="Or add custom input..."
+                              className="guided-custom-input"
+                              onKeyDown={(event) => {
+                                if (event.key === "Enter") {
+                                  event.preventDefault();
+                                  if (!guidedLoading) void handleGuidedNext();
+                                }
+                              }}
+                            />
+                          </div>
+                        </>
+                      )}
+                      <div className="guided-actions">
+                        {activeGuidedCycle.status === "guided" && (
+                          <button
+                            className="guided-next-btn"
+                            onClick={() => void handleGuidedNext()}
+                            disabled={guidedLoading}
+                          >
+                            {guidedLoading ? "Loading..." : "Next"}
+                          </button>
+                        )}
+                        <button
+                          className="guided-analyze-btn"
+                          onClick={() => void handleAnalyzeNow()}
+                          disabled={loading || !activeGuidedCycle.baseRequirement}
+                        >
+                          Analyze now
+                        </button>
+                      </div>
+                    </div>
+                  )}
                 {activeThread?.messages.map((message, index) => {
                   const followUpReply = message.role === "user" ? parseFollowUpReplyText(message.text) : null;
                   if (followUpReply) {
@@ -1530,7 +1703,50 @@ export default function AnalyzerApp() {
                         </div>
                       ) : null}
 
-                      {message.analysisResults?.length ? (
+                      {message.detailedResult ? (
+                        <div className="analysis-detailed-card">
+                          <div className="analysis-item-header">
+                            <span className="text-[0.7rem] font-semibold uppercase tracking-[0.12em] text-obsidian/55">
+                              Detailed Analysis
+                            </span>
+                            <span className={`badge ${classifyTone(message.detailedResult.classification)}`}>
+                              {message.detailedResult.classification}
+                            </span>
+                          </div>
+                          <div className="analysis-requirement-box">
+                            <p className="text-[0.68rem] font-semibold uppercase tracking-[0.12em] text-obsidian/55">
+                              Final Requirement
+                            </p>
+                            <p className="mt-1 text-xs leading-relaxed text-obsidian/72">
+                              {message.detailedResult.finalRequirement}
+                            </p>
+                          </div>
+                          <div className="analysis-response-box">
+                            <p className="analysis-response-label">Why this classification</p>
+                            <p className="mt-1 text-sm font-medium leading-relaxed text-obsidian/88">
+                              {message.detailedResult.why}
+                            </p>
+                            <p className="mt-2 text-xs font-semibold uppercase tracking-[0.1em] text-obsidian/58">
+                              Confidence: {Math.round(message.detailedResult.confidence * 100)}%
+                            </p>
+                          </div>
+                          {message.detailedResult.references.length > 0 && (
+                            <div className="mt-2 flex flex-wrap gap-2">
+                              {message.detailedResult.references.map((source) => (
+                                <a
+                                  key={source.url}
+                                  href={source.url}
+                                  target="_blank"
+                                  rel="noreferrer"
+                                  className="rounded-full border border-obsidian/10 px-3 py-1 text-[0.65rem] text-obsidian/70"
+                                >
+                                  {source.title}
+                                </a>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      ) : message.analysisResults?.length ? (
                         <div className="analysis-grid">
                           {message.analysisResults.map((item, analysisIndex) => (
                             <div key={`${item.requirement}-${analysisIndex}`} className="analysis-item">
@@ -1567,31 +1783,6 @@ export default function AnalyzerApp() {
                                   </>
                                 );
                               })()}
-                              {item.clarifying_questions && item.clarifying_questions.length > 0 && (
-                                <div className="mt-2 rounded-xl border border-amber/25 bg-amber/10 px-3 py-2">
-                                  <p className="text-[0.65rem] font-semibold uppercase tracking-[0.12em] text-amber">
-                                    Follow-up needed
-                                  </p>
-                                  <div className="mt-1 grid gap-1 text-xs text-obsidian/70">
-                                    {item.clarifying_questions.slice(0, 3).map((question, qIdx) => (
-                                      <div
-                                        key={`${item.requirement}-q-${qIdx}`}
-                                        className="followup-row group/followup"
-                                      >
-                                        <p className="followup-text">- {question}</p>
-                                        <button
-                                          className="followup-arrow"
-                                          onClick={() => handleFollowUpQuestionSelect(question, item.requirement)}
-                                          aria-label={`Reply to follow-up question: ${question}`}
-                                          title="Reply to this follow-up"
-                                        >
-                                          Reply
-                                        </button>
-                                      </div>
-                                    ))}
-                                  </div>
-                                </div>
-                              )}
                               <div className="mt-2 flex flex-wrap gap-2">
                                 {getSources(item).slice(0, 2).map((source) => (
                                   <a
@@ -1646,21 +1837,6 @@ export default function AnalyzerApp() {
               </div>
 
               <div className={`chat-composer-wrap ${isDiscussionIdle ? "chat-composer-wrap-highlight" : ""}`}>
-                {selectedFollowUpQuestion && (
-                  <div className="selected-followup">
-                    <div className="selected-followup-label">Replying to follow-up:</div>
-                    <div className="selected-followup-content">
-                      <span className="selected-followup-text">{selectedFollowUpQuestion.question}</span>
-                      <button
-                        className="selected-followup-clear"
-                        onClick={() => setSelectedFollowUpQuestion(null)}
-                        aria-label="Clear selected follow-up question"
-                      >
-                        ×
-                      </button>
-                    </div>
-                  </div>
-                )}
                 <div className="chat-attachments-list">
                   {attachments.map((item) => (
                     <span key={item.id} className="attachment-chip">
@@ -1691,10 +1867,11 @@ export default function AnalyzerApp() {
                     onChange={(event) => setComposer(event.target.value)}
                     className="composer-input"
                     placeholder={
-                      selectedFollowUpQuestion
-                        ? "Type your reply to the selected follow-up question..."
+                      activeGuidedCycle?.status === "guided"
+                        ? "Use guided follow-up card above, or click Analyze now..."
                         : "Discuss scope, requirements, assumptions, and constraints..."
                     }
+                    disabled={activeGuidedCycle?.status === "guided"}
                     onKeyDown={(event) => {
                       if (event.key === "Enter" && !event.shiftKey) {
                         event.preventDefault();
@@ -1705,7 +1882,7 @@ export default function AnalyzerApp() {
                   <button
                     onClick={() => void handleSend()}
                     className="composer-send"
-                    disabled={loading || (!composer.trim() && attachments.length === 0)}
+                    disabled={loading || activeGuidedCycle?.status === "guided" || (!composer.trim() && attachments.length === 0)}
                   >
                     Send
                   </button>

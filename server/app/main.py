@@ -7,6 +7,7 @@ from fastapi.responses import StreamingResponse
 import io
 import html
 import re
+import json
 
 from .confluence import (
     create_child_page,
@@ -22,6 +23,7 @@ from .ingest import IngestDocument, upsert_document_chunks
 from .chroma_service import ChromaService
 from .config import settings
 from .gap_analyzer import analyze_requirement
+from .llm_service import generate_text
 from .fsd_generator import (
     generate_fsd_docx,
     generate_fsd_docx_from_text,
@@ -37,6 +39,9 @@ from .schemas import (
     AnalyzeRequest,
     AnalyzeResponse,
     GapResult,
+    FollowupStepRequest,
+    FollowupStepResponse,
+    FollowupStepOption,
     GenerateFsdRequest,
     GenerateFsdTextRequest,
     GenerateFsdResponse,
@@ -58,6 +63,33 @@ from .baseline_store import compare_to_baseline, load_baseline, save_baseline
 
 app = FastAPI(title="SFRA AI Agent API", version="0.2.0")
 chroma = ChromaService()
+
+FALLBACK_FOLLOWUP_STEPS = [
+    {
+        "question": "What exact scope and page context should this requirement apply to?",
+        "options": [
+            {"label": "Homepage module only", "recommended": True},
+            {"label": "PLP/PDP and homepage consistency"},
+            {"label": "Site-wide reusable component"},
+        ],
+    },
+    {
+        "question": "What behavior or rule should be strictly enforced?",
+        "options": [
+            {"label": "Business Manager configurable behavior", "recommended": True},
+            {"label": "Hardcoded implementation for launch speed"},
+            {"label": "Configurable + validation safeguards"},
+        ],
+    },
+    {
+        "question": "What data source and acceptance criteria should drive this requirement?",
+        "options": [
+            {"label": "Use existing SFRA/OOTB source first", "recommended": True},
+            {"label": "Use external/custom API integration"},
+            {"label": "Need both OOTB and project-specific FSD mapping"},
+        ],
+    },
+]
 
 origins = [origin.strip() for origin in settings.cors_allow_origins.split(",") if origin.strip()]
 allow_credentials = True
@@ -114,6 +146,110 @@ def fsd_text_to_confluence_html(title: str, fsd_text: str) -> str:
             continue
         body_parts.append(f"<p>{html.escape(line)}</p>")
     return f"<h1>{html.escape(title)}</h1>{''.join(body_parts)}"
+
+
+def _extract_json_object(raw_text: str) -> dict | None:
+    start = raw_text.find("{")
+    end = raw_text.rfind("}")
+    if start == -1 or end == -1 or end <= start:
+        return None
+    try:
+        payload = json.loads(raw_text[start : end + 1])
+    except Exception:
+        return None
+    if isinstance(payload, dict):
+        return payload
+    return None
+
+
+def _sanitize_followup_step(payload: dict, fallback_step: int) -> FollowupStepResponse:
+    fallback = FALLBACK_FOLLOWUP_STEPS[min(fallback_step, len(FALLBACK_FOLLOWUP_STEPS) - 1)]
+    question = str(payload.get("question") or fallback["question"]).strip()
+    raw_options = payload.get("options")
+    cleaned: list[dict] = []
+    if isinstance(raw_options, list):
+        for item in raw_options:
+            if isinstance(item, dict):
+                label = str(item.get("label") or "").strip()
+                recommended = bool(item.get("recommended"))
+            else:
+                label = str(item).strip()
+                recommended = False
+            if label:
+                cleaned.append({"label": label, "recommended": recommended})
+    if not cleaned:
+        cleaned = fallback["options"][:]
+
+    # de-duplicate labels and clamp to 2-4 options
+    deduped: list[dict] = []
+    seen = set()
+    for opt in cleaned:
+        key = opt["label"].lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(opt)
+    deduped = deduped[:4]
+    if len(deduped) < 2:
+        for fallback_opt in fallback["options"]:
+            key = fallback_opt["label"].lower()
+            if key in seen:
+                continue
+            deduped.append(fallback_opt)
+            seen.add(key)
+            if len(deduped) >= 2:
+                break
+
+    recommended_indices = [i for i, item in enumerate(deduped) if item.get("recommended")]
+    if len(recommended_indices) != 1:
+        for i, item in enumerate(deduped):
+            item["recommended"] = i == 0
+
+    return FollowupStepResponse(
+        question=question,
+        options=[FollowupStepOption(label=item["label"], recommended=bool(item["recommended"])) for item in deduped],
+        allow_custom=True,
+        is_terminal=bool(payload.get("is_terminal", False)),
+    )
+
+
+def _generate_followup_step(requirement: str, history: list[dict], step_index: int, max_steps: int) -> FollowupStepResponse:
+    if step_index >= max_steps:
+        fallback = FALLBACK_FOLLOWUP_STEPS[min(step_index, len(FALLBACK_FOLLOWUP_STEPS) - 1)]
+        return FollowupStepResponse(
+            question=fallback["question"],
+            options=[FollowupStepOption(**opt) for opt in fallback["options"]],
+            allow_custom=True,
+            is_terminal=True,
+        )
+
+    history_text = "\n".join(
+        [f"- Q: {item.get('question', '').strip()} | A: {item.get('answer', '').strip()}" for item in history]
+    ).strip()
+    prompt = (
+        "You are preparing guided follow-up for requirement refinement.\n"
+        "Return ONLY valid JSON with keys: question, options, is_terminal.\n"
+        "options must be an array of 2-4 objects: {\"label\": string, \"recommended\": boolean}.\n"
+        "Exactly one option must be recommended=true.\n"
+        "Question should be concise and high-impact for SFRA requirement clarity.\n"
+        "is_terminal should usually be false unless enough context already exists.\n\n"
+        f"Step index: {step_index}\n"
+        f"Max steps: {max_steps}\n"
+        f"Requirement: {requirement}\n"
+        f"History:\n{history_text or '(none)'}\n"
+    )
+    try:
+        raw = generate_text(prompt).strip()
+        parsed = _extract_json_object(raw) or {}
+        return _sanitize_followup_step(parsed, step_index)
+    except Exception:
+        fallback = FALLBACK_FOLLOWUP_STEPS[min(step_index, len(FALLBACK_FOLLOWUP_STEPS) - 1)]
+        return FollowupStepResponse(
+            question=fallback["question"],
+            options=[FollowupStepOption(**opt) for opt in fallback["options"]],
+            allow_custom=True,
+            is_terminal=step_index >= max_steps - 1,
+        )
 
 
 @app.get("/health")
@@ -204,6 +340,16 @@ async def analyze_file(file: UploadFile = File(...), top_k: int = Form(None)):
         gap = analyze_requirement(chroma, requirement, use_top_k)
         results.append(GapResult(**gap.__dict__))
     return AnalyzeResponse(total=len(results), results=results)
+
+
+@app.post("/requirements/followup-step", response_model=FollowupStepResponse)
+def followup_step(payload: FollowupStepRequest):
+    requirement = payload.requirement.strip()
+    if not requirement:
+        raise HTTPException(status_code=400, detail="requirement is required")
+
+    history = [item.model_dump() for item in payload.history]
+    return _generate_followup_step(requirement, history, payload.step_index, payload.max_steps)
 
 
 @app.post("/save-baseline", response_model=SaveBaselineResponse)

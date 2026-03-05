@@ -607,6 +607,76 @@ body {
   box-shadow: 0 6px 14px rgba(37, 99, 235, 0.08);
 }
 
+.guided-card {
+  @apply rounded-2xl border border-signal/25 bg-white px-4 py-3;
+  width: min(92%, 820px);
+  box-shadow: 0 10px 24px rgba(37, 99, 235, 0.1);
+}
+
+.guided-card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.guided-kicker {
+  @apply text-[0.66rem] font-semibold uppercase tracking-[0.14em] text-signal;
+}
+
+.guided-dismiss {
+  @apply text-[0.7rem] font-semibold text-obsidian/60 underline decoration-obsidian/25 underline-offset-2 transition-colors hover:text-obsidian;
+}
+
+.guided-question {
+  @apply mt-2 text-sm font-semibold text-obsidian;
+}
+
+.guided-options {
+  display: grid;
+  gap: 0.4rem;
+  margin-top: 0.55rem;
+}
+
+.guided-option {
+  @apply flex items-center justify-between gap-2 rounded-xl border border-slate/30 bg-slate/10 px-3 py-2 text-left text-xs text-obsidian/80 transition-all duration-150 hover:-translate-y-[1px] hover:bg-white;
+}
+
+.guided-option.selected {
+  @apply border-signal/30 bg-signal/10 text-obsidian;
+}
+
+.guided-badge {
+  @apply inline-flex rounded-full border border-signal/25 bg-signal/10 px-2 py-0.5 text-[0.62rem] font-semibold uppercase tracking-[0.08em] text-signal;
+}
+
+.guided-custom-row {
+  margin-top: 0.55rem;
+}
+
+.guided-custom-input {
+  @apply w-full rounded-xl border border-obsidian/15 bg-white px-3 py-2 text-xs text-obsidian/80 focus:outline-none focus:ring-2 focus:ring-signal/30;
+}
+
+.guided-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.5rem;
+  margin-top: 0.65rem;
+}
+
+.guided-next-btn {
+  @apply rounded-full border border-obsidian/15 bg-white px-3 py-1.5 text-xs font-semibold text-obsidian/75 transition-colors hover:text-obsidian disabled:cursor-not-allowed disabled:opacity-60;
+}
+
+.guided-analyze-btn {
+  @apply rounded-full bg-signal px-3.5 py-1.5 text-xs font-semibold text-white disabled:cursor-not-allowed disabled:opacity-60;
+}
+
+.guided-cancel-note {
+  @apply mt-2 text-xs text-obsidian/60;
+}
+
 .chat-transcript::-webkit-scrollbar {
   width: 10px;
 }
@@ -836,6 +906,10 @@ body {
 
 .analysis-item {
   @apply rounded-2xl border border-slate/25 bg-slate/10 p-3;
+}
+
+.analysis-detailed-card {
+  @apply rounded-2xl border border-signal/25 bg-slate/10 p-3;
 }
 
 .analysis-item-header {

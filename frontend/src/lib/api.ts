@@ -36,6 +36,23 @@ export type BaselineRemovedItem = {
   confidence?: number | null;
 };
 
+export type FollowupHistoryItem = {
+  question: string;
+  answer: string;
+};
+
+export type FollowupStepOption = {
+  label: string;
+  recommended: boolean;
+};
+
+export type FollowupStepResponse = {
+  question: string;
+  options: FollowupStepOption[];
+  allow_custom: boolean;
+  is_terminal: boolean;
+};
+
 export type ConfluenceSpace = {
   key: string;
   name: string;
@@ -78,6 +95,28 @@ export async function analyzeSingleRequirement(text: string) {
     baseline?: BaselineSummary | null;
     baseline_removed?: BaselineRemovedItem[] | null;
   }>;
+}
+
+export async function fetchFollowupStep(
+  requirement: string,
+  history: FollowupHistoryItem[],
+  stepIndex: number,
+  maxSteps = 3
+) {
+  const res = await fetch(`${API_BASE}/requirements/followup-step`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      requirement,
+      history,
+      step_index: stepIndex,
+      max_steps: maxSteps,
+    }),
+  });
+  if (!res.ok) {
+    throw new Error(await res.text());
+  }
+  return res.json() as Promise<FollowupStepResponse>;
 }
 
 export async function analyzeRequirementsFile(file: File) {
