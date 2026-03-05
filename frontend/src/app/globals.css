@@ -135,6 +135,14 @@ body {
   flex-direction: column;
 }
 
+.history-search-wrap {
+  padding: 0 0.75rem 0.55rem;
+}
+
+.history-search-input {
+  @apply w-full rounded-xl border border-obsidian/15 bg-white px-3 py-2 text-xs text-obsidian/75 focus:outline-none focus:ring-2 focus:ring-signal/30;
+}
+
 .history-list {
   display: grid;
   grid-auto-rows: max-content;
@@ -197,6 +205,24 @@ body {
   -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
   overflow: hidden;
+}
+
+.history-thread-projects {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+}
+
+.history-thread-project-chip {
+  @apply inline-flex rounded-full border border-signal/25 bg-signal/10 px-2 py-0.5 text-[0.6rem] font-semibold uppercase tracking-[0.08em] text-signal;
+}
+
+.history-thread-project-more {
+  @apply inline-flex items-center text-[0.6rem] font-semibold text-obsidian/55;
+}
+
+.history-thread-empty {
+  @apply rounded-xl border border-dashed border-obsidian/20 bg-white/70 px-3 py-4 text-center text-xs text-obsidian/60;
 }
 
 .history-thread-time {
@@ -437,12 +463,32 @@ body {
   @apply mt-4 grid gap-3;
 }
 
+.analysis-grid-controls {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.4rem;
+}
+
+.analysis-grid-toggle {
+  @apply rounded-full border border-obsidian/15 bg-white px-2.5 py-1 text-[0.62rem] font-semibold uppercase tracking-[0.1em] text-obsidian/65 hover:text-obsidian;
+}
+
 .analysis-item {
   @apply rounded-2xl border border-slate/25 bg-slate/10 p-3;
 }
 
 .analysis-item-header {
   @apply mb-2 flex flex-wrap items-center justify-between gap-2;
+}
+
+.analysis-item-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+}
+
+.analysis-item-toggle {
+  @apply rounded-full border border-obsidian/15 bg-white px-2.5 py-1 text-[0.62rem] font-semibold uppercase tracking-[0.1em] text-obsidian/65 transition-colors hover:text-obsidian;
 }
 
 .followup-row {

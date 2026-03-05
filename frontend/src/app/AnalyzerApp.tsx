@@ -170,6 +170,29 @@ const getSources = (item: GapResult) => {
   return sources;
 };
 
+const getProjectsFromResult = (item: GapResult) => {
+  const projects = new Set<string>();
+  for (const chunk of item.top_chunks || []) {
+    const meta = chunk.metadata || {};
+    const project =
+      (typeof meta.project === "string" && meta.project) ||
+      (typeof meta.space_key === "string" && meta.space_key) ||
+      "";
+    if (project.trim()) projects.add(project.trim());
+  }
+  return Array.from(projects);
+};
+
+const getProjectsFromThread = (thread: ChatThread) => {
+  const projects = new Set<string>();
+  for (const message of thread.messages) {
+    for (const item of message.analysisResults || []) {
+      for (const project of getProjectsFromResult(item)) projects.add(project);
+    }
+  }
+  return Array.from(projects);
+};
+
 const createThread = (seed?: string): ChatThread => {
   const now = new Date().toISOString();
   const title = seed ? firstMeaningfulLine(seed).slice(0, 60) : "New scope discussion";
@@ -236,6 +259,8 @@ export default function AnalyzerApp() {
     threadId: string;
     messageId: string;
   } | null>(null);
+  const [threadSearch, setThreadSearch] = useState("");
+  const [expandedAnalysisKeys, setExpandedAnalysisKeys] = useState<Set<string>>(new Set());
 
   const historyDrawerRef = useRef<HTMLDivElement | null>(null);
   const summaryDrawerRef = useRef<HTMLDivElement | null>(null);
@@ -273,6 +298,29 @@ export default function AnalyzerApp() {
     return lines.slice(0, 8);
   }, [fsdPreview]);
 
+  const latestCounts = useMemo(() => statusCounts(latestAnalysisResults), [latestAnalysisResults]);
+
+  const summaryPercentages = useMemo(() => {
+    const total = latestCounts.total || 1;
+    return {
+      ootb: Math.round((latestCounts.ootb / total) * 100),
+      partial: Math.round((latestCounts.partial / total) * 100),
+      custom: Math.round((latestCounts.custom / total) * 100),
+      open: Math.round((latestCounts.open / total) * 100),
+    };
+  }, [latestCounts]);
+
+  const filteredThreads = useMemo(() => {
+    const query = threadSearch.trim().toLowerCase();
+    if (!query) return threads;
+    return threads.filter((thread) => {
+      const projects = getProjectsFromThread(thread).join(" ").toLowerCase();
+      const text = thread.messages.map((message) => message.text).join(" ").toLowerCase();
+      const title = thread.title.toLowerCase();
+      return title.includes(query) || projects.includes(query) || text.includes(query);
+    });
+  }, [threadSearch, threads]);
+
   const closeOverlays = () => {
     setIsMobileHistoryOpen(false);
     setIsMobileSummaryOpen(false);
@@ -296,6 +344,25 @@ export default function AnalyzerApp() {
   useEffect(() => {
     chatScrollRef.current?.scrollTo({ top: chatScrollRef.current.scrollHeight, behavior: "smooth" });
   }, [activeThread?.messages]);
+
+  useEffect(() => {
+    const validKeys = new Set<string>();
+    for (const thread of threads) {
+      for (const message of thread.messages) {
+        const total = message.analysisResults?.length || 0;
+        for (let i = 0; i < total; i += 1) {
+          validKeys.add(`${thread.id}:${message.id}:${i}`);
+        }
+      }
+    }
+    setExpandedAnalysisKeys((prev) => {
+      const next = new Set<string>();
+      for (const key of prev) {
+        if (validKeys.has(key)) next.add(key);
+      }
+      return next;
+    });
+  }, [threads]);
 
   useEffect(() => {
     if (!isChatAnalyzing) {
@@ -599,7 +666,8 @@ export default function AnalyzerApp() {
         ? await analyzeSingleRequirement(analysisText)
         : await analyzeRequirementsText(analysisText);
       const counts = statusCounts(payload.results);
-      const summaryText = `Analyzed ${counts.total} requirements: ${counts.ootb} OOTB, ${counts.partial} partial, ${counts.custom} custom, ${counts.open} open.`;
+      const total = counts.total || 1;
+      const summaryText = `Analyzed ${counts.total} requirements: ${counts.ootb} OOTB (${Math.round((counts.ootb / total) * 100)}%), ${counts.partial} partial (${Math.round((counts.partial / total) * 100)}%), ${counts.custom} custom dev required (${Math.round((counts.custom / total) * 100)}%), ${counts.open} open (${Math.round((counts.open / total) * 100)}%).`;
 
       const assistantMessage: ChatMessage = {
         id: crypto.randomUUID(),
@@ -949,13 +1017,25 @@ export default function AnalyzerApp() {
               </button>
             </div>
 
+            <div className="history-search-wrap">
+              <input
+                value={threadSearch}
+                onChange={(event) => setThreadSearch(event.target.value)}
+                className="history-search-input"
+                placeholder="Search thread or project..."
+                aria-label="Search threads by project or title"
+              />
+            </div>
+
             <div role="listbox" aria-label="Previous chats" className="history-list">
-              {threads.map((thread) => (
-                <div
-                  key={thread.id}
-                  className={`history-thread ${thread.id === activeThread?.id ? "active" : ""}`}
-                  title={thread.title}
-                >
+              {filteredThreads.map((thread) => {
+                const threadProjects = getProjectsFromThread(thread);
+                return (
+                  <div
+                    key={thread.id}
+                    className={`history-thread ${thread.id === activeThread?.id ? "active" : ""}`}
+                    title={thread.title}
+                  >
                   <button
                     className="history-thread-main"
                     onClick={() => {
@@ -1040,7 +1120,21 @@ export default function AnalyzerApp() {
                         </button>
                       </div>
                     ) : (
-                      <span className="history-thread-title">{thread.title}</span>
+                      <div className="grid gap-1">
+                        <span className="history-thread-title">{thread.title}</span>
+                        {threadProjects.length > 0 && (
+                          <div className="history-thread-projects">
+                            {threadProjects.slice(0, 2).map((project) => (
+                              <span key={`${thread.id}-project-${project}`} className="history-thread-project-chip">
+                                {project}
+                              </span>
+                            ))}
+                            {threadProjects.length > 2 && (
+                              <span className="history-thread-project-more">+{threadProjects.length - 2}</span>
+                            )}
+                          </div>
+                        )}
+                      </div>
                     )}
                   </button>
                   {!isHistoryCollapsed && pendingDeleteThreadId !== thread.id && deletingThreadId !== thread.id && (
@@ -1066,8 +1160,12 @@ export default function AnalyzerApp() {
                       )}
                     </div>
                   )}
-                </div>
-              ))}
+                  </div>
+                );
+              })}
+              {filteredThreads.length === 0 && (
+                <div className="history-thread-empty">No matching threads or projects.</div>
+              )}
             </div>
             <div className="history-footer hidden lg:block">
               <button
@@ -1171,55 +1269,113 @@ export default function AnalyzerApp() {
 
                     {message.analysisResults?.length ? (
                       <div className="analysis-grid">
-                        {message.analysisResults.map((item, index) => (
-                          <div key={`${item.requirement}-${index}`} className="analysis-item">
-                            <div className="analysis-item-header">
-                              <span className="font-semibold text-obsidian">{item.requirement}</span>
-                              <span className={`badge ${classifyTone(item.classification)}`}>
-                                {item.classification}
-                              </span>
-                            </div>
-                            <p className="text-xs text-obsidian/70">{item.rationale}</p>
-                            {item.clarifying_questions && item.clarifying_questions.length > 0 && (
-                              <div className="mt-2 rounded-xl border border-amber/25 bg-amber/10 px-3 py-2">
-                                <p className="text-[0.65rem] font-semibold uppercase tracking-[0.12em] text-amber">
-                                  Follow-up needed
-                                </p>
-                                <div className="mt-1 grid gap-1 text-xs text-obsidian/70">
-                                  {item.clarifying_questions.slice(0, 3).map((question, qIdx) => (
-                                    <div
-                                      key={`${item.requirement}-q-${qIdx}`}
-                                      className="followup-row group/followup"
-                                    >
-                                      <p className="followup-text">- {question}</p>
-                                      <button
-                                        className="followup-arrow"
-                                        onClick={() => handleFollowUpQuestionSelect(question, item.requirement)}
-                                        aria-label={`Reply to follow-up question: ${question}`}
-                                        title="Reply to this follow-up"
-                                      >
-                                        Reply
-                                      </button>
-                                    </div>
-                                  ))}
+                        <div className="analysis-grid-controls">
+                          <button
+                            className="analysis-grid-toggle"
+                            onClick={() => {
+                              if (!activeThread) return;
+                              setExpandedAnalysisKeys((prev) => {
+                                const next = new Set(prev);
+                                message.analysisResults?.forEach((_, analysisIndex) => {
+                                  next.add(`${activeThread.id}:${message.id}:${analysisIndex}`);
+                                });
+                                return next;
+                              });
+                            }}
+                          >
+                            Expand all
+                          </button>
+                          <button
+                            className="analysis-grid-toggle"
+                            onClick={() => {
+                              if (!activeThread) return;
+                              setExpandedAnalysisKeys((prev) => {
+                                const next = new Set(prev);
+                                message.analysisResults?.forEach((_, analysisIndex) => {
+                                  next.delete(`${activeThread.id}:${message.id}:${analysisIndex}`);
+                                });
+                                return next;
+                              });
+                            }}
+                          >
+                            Collapse all
+                          </button>
+                        </div>
+                        {message.analysisResults.map((item, analysisIndex) => {
+                          const analysisKey = `${activeThread?.id || "thread"}:${message.id}:${analysisIndex}`;
+                          const isExpanded = expandedAnalysisKeys.has(analysisKey);
+                          return (
+                            <div key={`${item.requirement}-${analysisIndex}`} className="analysis-item">
+                              <div className="analysis-item-header">
+                                <span className="font-semibold text-obsidian">{item.requirement}</span>
+                                <div className="analysis-item-header-actions">
+                                  <span className={`badge ${classifyTone(item.classification)}`}>
+                                    {item.classification}
+                                  </span>
+                                  <button
+                                    className="analysis-item-toggle"
+                                    onClick={() =>
+                                      setExpandedAnalysisKeys((prev) => {
+                                        const next = new Set(prev);
+                                        if (next.has(analysisKey)) next.delete(analysisKey);
+                                        else next.add(analysisKey);
+                                        return next;
+                                      })
+                                    }
+                                    aria-expanded={isExpanded}
+                                  >
+                                    {isExpanded ? "Hide details" : "Show details"}
+                                  </button>
                                 </div>
                               </div>
-                            )}
-                            <div className="mt-2 flex flex-wrap gap-2">
-                              {getSources(item).slice(0, 2).map((source) => (
-                                <a
-                                  key={source.url}
-                                  href={source.url}
-                                  target="_blank"
-                                  rel="noreferrer"
-                                  className="rounded-full border border-obsidian/10 px-3 py-1 text-[0.65rem] text-obsidian/70"
-                                >
-                                  {source.title}
-                                </a>
-                              ))}
+                              {isExpanded && (
+                                <>
+                                  <p className="text-xs text-obsidian/70">{item.rationale}</p>
+                                  {item.clarifying_questions && item.clarifying_questions.length > 0 && (
+                                    <div className="mt-2 rounded-xl border border-amber/25 bg-amber/10 px-3 py-2">
+                                      <p className="text-[0.65rem] font-semibold uppercase tracking-[0.12em] text-amber">
+                                        Follow-up needed
+                                      </p>
+                                      <div className="mt-1 grid gap-1 text-xs text-obsidian/70">
+                                        {item.clarifying_questions.slice(0, 3).map((question, qIdx) => (
+                                          <div
+                                            key={`${item.requirement}-q-${qIdx}`}
+                                            className="followup-row group/followup"
+                                          >
+                                            <p className="followup-text">- {question}</p>
+                                            <button
+                                              className="followup-arrow"
+                                              onClick={() =>
+                                                handleFollowUpQuestionSelect(question, item.requirement)
+                                              }
+                                              aria-label={`Reply to follow-up question: ${question}`}
+                                              title="Reply to this follow-up"
+                                            >
+                                              Reply
+                                            </button>
+                                          </div>
+                                        ))}
+                                      </div>
+                                    </div>
+                                  )}
+                                  <div className="mt-2 flex flex-wrap gap-2">
+                                    {getSources(item).slice(0, 2).map((source) => (
+                                      <a
+                                        key={source.url}
+                                        href={source.url}
+                                        target="_blank"
+                                        rel="noreferrer"
+                                        className="rounded-full border border-obsidian/10 px-3 py-1 text-[0.65rem] text-obsidian/70"
+                                      >
+                                        {source.title}
+                                      </a>
+                                    ))}
+                                  </div>
+                                </>
+                              )}
                             </div>
-                          </div>
-                        ))}
+                          );
+                        })}
                       </div>
                     ) : null}
                 {message.role === "assistant" && index > 0 && message.analysisResults?.length && (
@@ -1346,6 +1502,31 @@ export default function AnalyzerApp() {
             >
               x
             </button>
+          </div>
+
+          <div className="summary-metrics">
+            <div className="summary-metric">
+              <span>Total</span>
+              <strong>{latestCounts.total}</strong>
+            </div>
+            <div className="summary-metric">
+              <span>OOTB</span>
+              <strong>
+                {latestCounts.ootb} ({summaryPercentages.ootb}%)
+              </strong>
+            </div>
+            <div className="summary-metric">
+              <span>Partial</span>
+              <strong>
+                {latestCounts.partial} ({summaryPercentages.partial}%)
+              </strong>
+            </div>
+            <div className="summary-metric">
+              <span>Custom Dev</span>
+              <strong>
+                {latestCounts.custom} ({summaryPercentages.custom}%)
+              </strong>
+            </div>
           </div>
 
           <div className="summary-insights">
