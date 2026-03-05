@@ -1105,11 +1105,13 @@ export default function AnalyzerApp() {
           {isHistoryCollapsed && (
             <div className="history-collapsed-only hidden lg:flex">
               <button
-                className="icon-chip"
+                className="history-expand-fab"
                 onClick={() => setIsHistoryCollapsed(false)}
                 aria-label="Expand history"
               >
-                {">"}
+                <svg viewBox="0 0 24 24" aria-hidden="true" className="history-collapse-icon">
+                  <path d="M10 6l6 6-6 6" />
+                </svg>
               </button>
             </div>
           )}
@@ -1290,8 +1292,12 @@ export default function AnalyzerApp() {
                 onClick={() => setIsHistoryCollapsed(true)}
                 aria-label="Collapse history"
               >
-                <span aria-hidden="true">&lt;</span>
-                <span>Collapse</span>
+                <span className="history-collapse-icon-wrap" aria-hidden="true">
+                  <svg viewBox="0 0 24 24" className="history-collapse-icon">
+                    <path d="M14 6l-6 6 6 6" />
+                  </svg>
+                </span>
+                <span className="history-collapse-label">Collapse panel</span>
               </button>
             </div>
           </div>
