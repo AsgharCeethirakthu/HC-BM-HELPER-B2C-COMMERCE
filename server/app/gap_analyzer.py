@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime, timezone
 import json
 import logging
 import re
@@ -51,6 +52,10 @@ class GapResult:
     llm_response: Optional[str]
     citations: Optional[list[dict]]
     clarifying_questions: Optional[list[str]]
+    implementation_mode: Optional[str]
+    coverage_status: Optional[str]
+    project_match_status: Optional[str]
+    gaps: Optional[list[str]]
 
 
 def _score_from_distance(distance: float) -> float:
@@ -175,6 +180,177 @@ def _is_official_sfra_chunk(chunk: dict) -> bool:
     )
 
 
+def _split_chunk_sources(chunks: list[dict]) -> tuple[list[dict], list[dict]]:
+    project_chunks: list[dict] = []
+    baseline_chunks: list[dict] = []
+    for chunk in chunks:
+        meta = chunk.get("metadata") or {}
+        source = str(meta.get("source") or "").lower()
+        if source == "confluence":
+            project_chunks.append(chunk)
+        if source in {"baseline_web", "sfcc"} or _is_official_sfra_chunk(chunk):
+            baseline_chunks.append(chunk)
+    return project_chunks, baseline_chunks
+
+
+def _is_project_doc_trusted(chunk: dict) -> bool:
+    meta = chunk.get("metadata") or {}
+    token = " ".join(
+        [
+            str(meta.get("title") or ""),
+            str(meta.get("source_id") or ""),
+            str(meta.get("url") or ""),
+            str(chunk.get("text") or "")[:200],
+        ]
+    ).lower()
+    # Avoid promoting generic templates/how-to snippets as implementation proof.
+    blocked = {"template", "how-to", "how to", "boilerplate", "sample"}
+    return not any(term in token for term in blocked)
+
+
+def _is_recent_project_doc(chunk: dict, max_age_days: int = 720) -> bool:
+    meta = chunk.get("metadata") or {}
+    raw = str(meta.get("updated_at") or "").strip()
+    if not raw:
+        # Do not block when date metadata is missing.
+        return True
+    try:
+        normalized = raw.replace("Z", "+00:00")
+        dt = datetime.fromisoformat(normalized)
+    except ValueError:
+        return True
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    age_days = (datetime.now(timezone.utc) - dt).days
+    return age_days <= max_age_days
+
+
+def _project_reliability_gate(requirement: str, project_chunks: list[dict]) -> tuple[bool, Optional[dict]]:
+    if not project_chunks:
+        return False, None
+    best = project_chunks[0]
+    best_score = float(best.get("score") or 0.0)
+    overlap = _lexical_overlap(requirement, best.get("text") or "")
+    trusted = _is_project_doc_trusted(best)
+    recent = _is_recent_project_doc(best)
+    reliable = best_score >= 0.72 and overlap >= 0.18 and trusted and recent
+    return reliable, best
+
+
+def _detect_project_match_status(requirement: str, reliable: bool, project_chunks: list[dict]) -> str:
+    if not project_chunks:
+        return "not_implemented"
+    best_overlap = max(_lexical_overlap(requirement, chunk.get("text") or "") for chunk in project_chunks[:6])
+    if reliable and best_overlap >= 0.48:
+        return "already_implemented"
+    if best_overlap >= 0.2:
+        return "partially_implemented"
+    return "not_implemented"
+
+
+def _extract_requirement_clauses(requirement: str) -> list[str]:
+    normalized = re.sub(r"\s+", " ", requirement.strip())
+    if not normalized:
+        return []
+    parts = re.split(r"\b(?:and|with|plus|including|along with)\b|[,;]", normalized, flags=re.IGNORECASE)
+    clauses = [part.strip(" .:-") for part in parts]
+    clauses = [clause for clause in clauses if len(_tokenize(clause)) >= 3]
+    return clauses[:8]
+
+
+def _derive_gaps(
+    requirement: str,
+    classification: str,
+    project_status: str,
+    project_chunks: list[dict],
+    baseline_chunks: list[dict],
+) -> list[str]:
+    if classification not in {"Partial Match", "Open Question", "Custom Dev Required"} and project_status != "partially_implemented":
+        return []
+    clauses = _extract_requirement_clauses(requirement)
+    if not clauses:
+        return []
+    project_text = " ".join((chunk.get("text") or "")[:600] for chunk in project_chunks[:6])
+    baseline_text = " ".join((chunk.get("text") or "")[:600] for chunk in baseline_chunks[:6])
+    gaps: list[str] = []
+    for clause in clauses:
+        project_overlap = _lexical_overlap(clause, project_text)
+        baseline_overlap = _lexical_overlap(clause, baseline_text)
+        if project_overlap < 0.22 and baseline_overlap < 0.22:
+            gaps.append(clause)
+    if not gaps and classification == "Partial Match":
+        gaps.append("Additional extension beyond current configuration is required for complete scope.")
+    return gaps[:5]
+
+
+def _infer_coverage_status(
+    classification: str,
+    implementation_mode: str,
+    baseline_chunks: list[dict],
+) -> str:
+    has_baseline_support = bool(baseline_chunks) or _contains_official_sfra_evidence(baseline_chunks)
+    if classification == "OOTB Match" and implementation_mode == "config_only":
+        return "supported"
+    if classification == "Partial Match" or implementation_mode == "config_plus_code":
+        return "supported_with_extensions"
+    if classification == "Custom Dev Required" and not has_baseline_support:
+        return "unsupported"
+    if classification == "Custom Dev Required" and implementation_mode == "code_only":
+        return "unsupported"
+    return "uncertain"
+
+
+def _apply_project_first_flow(
+    requirement: str,
+    classification: str,
+    confidence: float,
+    rationale: str,
+    llm_response: Optional[str],
+    chunks: list[dict],
+) -> tuple[str, str, str, str, list[str], str]:
+    project_chunks, baseline_chunks = _split_chunk_sources(chunks)
+    reliable_project_match, _ = _project_reliability_gate(requirement, project_chunks)
+    project_status = _detect_project_match_status(requirement, reliable_project_match, project_chunks)
+
+    mode_source = project_chunks if reliable_project_match and project_chunks else chunks
+    implementation_mode = _infer_implementation_mode(
+        requirement=requirement,
+        chunks=mode_source,
+        classification=classification,
+        rationale=rationale,
+        llm_response=llm_response,
+    )
+
+    adjusted_classification = classification
+    if reliable_project_match and project_status == "already_implemented":
+        if implementation_mode == "config_only":
+            adjusted_classification = "OOTB Match"
+        elif implementation_mode == "config_plus_code":
+            adjusted_classification = "Partial Match"
+        elif implementation_mode == "code_only":
+            adjusted_classification = "Custom Dev Required"
+    elif reliable_project_match and project_status == "partially_implemented":
+        if adjusted_classification != "Custom Dev Required" or confidence < 0.72:
+            adjusted_classification = "Partial Match"
+    else:
+        # Baseline-led fallback still uses implementation mode to avoid over-penalizing config-only scope.
+        if implementation_mode == "config_only" and adjusted_classification == "Custom Dev Required" and confidence < 0.78:
+            adjusted_classification = "Partial Match"
+
+    gaps = _derive_gaps(
+        requirement=requirement,
+        classification=adjusted_classification,
+        project_status=project_status,
+        project_chunks=project_chunks,
+        baseline_chunks=baseline_chunks,
+    )
+    coverage_status = _infer_coverage_status(adjusted_classification, implementation_mode, baseline_chunks)
+
+    if adjusted_classification != classification:
+        rationale = f"{rationale}. Flow adjustment applied from project-first evidence and implementation mode."
+    return adjusted_classification, implementation_mode, coverage_status, project_status, gaps, rationale
+
+
 def _retrieve_chunks(chroma: ChromaService, query_text: str, top_k: int) -> tuple[list[dict], float]:
     retrieval_query = expand_requirement_query(query_text)
     response = chroma.query(retrieval_query, top_k)
@@ -288,6 +464,65 @@ def _promote_classification_with_baseline_signal(
     return classification
 
 
+def _infer_implementation_mode(
+    requirement: str,
+    chunks: list[dict],
+    classification: str,
+    rationale: str,
+    llm_response: Optional[str],
+) -> str:
+    text_pool = " ".join(
+        [
+            requirement or "",
+            rationale or "",
+            llm_response or "",
+            " ".join([(chunk.get("text") or "")[:500] for chunk in chunks[:6]]),
+        ]
+    ).lower()
+
+    config_signals = [
+        "business manager",
+        "page designer",
+        "content slot",
+        "content assets",
+        "merchant tools",
+        "configuration",
+        "configure",
+        "setting",
+    ]
+    code_signals = [
+        "cartridge",
+        "template",
+        "isml",
+        "controller",
+        "pipeline",
+        "javascript",
+        "server-side",
+        "custom component",
+        "customization",
+        "implement in code",
+        "code change",
+        "development effort",
+    ]
+
+    config_hits = sum(1 for signal in config_signals if signal in text_pool)
+    code_hits = sum(1 for signal in code_signals if signal in text_pool)
+
+    if classification == "OOTB Match" and code_hits == 0:
+        return "config_only"
+    if classification == "Custom Dev Required" and code_hits > 0 and config_hits == 0:
+        return "code_only"
+    if code_hits > 0 and config_hits > 0:
+        return "config_plus_code"
+    if config_hits > 0 and code_hits == 0:
+        return "config_only"
+    if code_hits > 0 and config_hits == 0:
+        return "code_only"
+    if classification == "Partial Match":
+        return "config_plus_code"
+    return "uncertain"
+
+
 def _generate_clarifying_questions(requirement: str, context: str) -> Optional[list[str]]:
     prompt = (
         "Create 3-5 concise clarifying questions needed to finalize this requirement.\n"
@@ -374,7 +609,7 @@ def analyze_requirement(chroma: ChromaService, requirement: str, top_k: int) -> 
         except Exception as exc:
             logger.warning("LLM questions failed: %s", exc)
 
-    return GapResult(
+    result = GapResult(
         requirement=requirement,
         classification=classification,
         confidence=round(confidence, 3),
@@ -385,7 +620,27 @@ def analyze_requirement(chroma: ChromaService, requirement: str, top_k: int) -> 
         llm_response=llm_response,
         citations=citations,
         clarifying_questions=clarifying_questions,
+        implementation_mode=None,
+        coverage_status=None,
+        project_match_status=None,
+        gaps=None,
     )
+    (
+        result.classification,
+        result.implementation_mode,
+        result.coverage_status,
+        result.project_match_status,
+        result.gaps,
+        result.rationale,
+    ) = _apply_project_first_flow(
+        requirement=requirement,
+        classification=result.classification,
+        confidence=result.confidence,
+        rationale=result.rationale,
+        llm_response=result.llm_response,
+        chunks=result.top_chunks,
+    )
+    return result
 
 
 def analyze_requirement_agentic(
@@ -486,7 +741,7 @@ def analyze_requirement_agentic(
             except Exception as exc:
                 logger.warning("LLM questions failed: %s", exc)
 
-        return GapResult(
+        result = GapResult(
             requirement=requirement,
             classification=classification,
             confidence=round(final_confidence, 3),
@@ -497,7 +752,27 @@ def analyze_requirement_agentic(
             llm_response="\n\n".join(llm_trace) if llm_trace else None,
             citations=citations,
             clarifying_questions=clarifying_questions,
+            implementation_mode=None,
+            coverage_status=None,
+            project_match_status=None,
+            gaps=None,
         )
+        (
+            result.classification,
+            result.implementation_mode,
+            result.coverage_status,
+            result.project_match_status,
+            result.gaps,
+            result.rationale,
+        ) = _apply_project_first_flow(
+            requirement=requirement,
+            classification=result.classification,
+            confidence=result.confidence,
+            rationale=result.rationale,
+            llm_response=result.llm_response,
+            chunks=result.top_chunks,
+        )
+        return result
     except Exception as exc:
         logger.warning("Agentic analyze failed, falling back to baseline: %s", exc)
         return analyze_requirement(chroma, requirement, top_k)

@@ -14,6 +14,10 @@ export type GapResult = {
   similarity_score?: number | null;
   llm_confidence?: number | null;
   llm_response?: string | null;
+  implementation_mode?: "config_only" | "config_plus_code" | "code_only" | "uncertain" | null;
+  coverage_status?: "supported" | "supported_with_extensions" | "unsupported" | "uncertain" | null;
+  project_match_status?: "already_implemented" | "partially_implemented" | "not_implemented" | "uncertain" | null;
+  gaps?: string[] | null;
   baseline_status?: string | null;
   baseline_requirement?: string | null;
   baseline_classification?: string | null;

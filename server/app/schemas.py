@@ -22,6 +22,10 @@ class GapResult(BaseModel):
     similarity_score: Optional[float] = None
     llm_confidence: Optional[float] = None
     llm_response: Optional[str] = None
+    implementation_mode: Optional[str] = None
+    coverage_status: Optional[str] = None
+    project_match_status: Optional[str] = None
+    gaps: Optional[list[str]] = None
     baseline_status: Optional[str] = None
     baseline_requirement: Optional[str] = None
     baseline_classification: Optional[str] = None

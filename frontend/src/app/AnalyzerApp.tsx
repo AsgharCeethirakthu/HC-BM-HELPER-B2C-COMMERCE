@@ -2625,22 +2625,46 @@ export default function AnalyzerApp() {
                   <strong>{fsdCoverageCounts.total}</strong>
                 </div>
                 <div className="summary-metric summary-metric-ootb">
-                  <span>OOTB</span>
-                  <strong>
-                    {fsdCoverageCounts.ootb} ({summaryPercentages.ootb}%)
-                  </strong>
+                  <div className="summary-metric-copy">
+                    <span>OOTB</span>
+                    <em>{fsdCoverageCounts.ootb} points</em>
+                  </div>
+                  <div
+                    className="summary-metric-ring"
+                    style={{
+                      background: `conic-gradient(var(--ring-color) ${summaryPercentages.ootb * 3.6}deg, rgba(148, 163, 184, 0.2) 0deg)`,
+                    }}
+                  >
+                    <span>{summaryPercentages.ootb}%</span>
+                  </div>
                 </div>
                 <div className="summary-metric summary-metric-partial">
-                  <span>Partial</span>
-                  <strong>
-                    {fsdCoverageCounts.partial} ({summaryPercentages.partial}%)
-                  </strong>
+                  <div className="summary-metric-copy">
+                    <span>Partial</span>
+                    <em>{fsdCoverageCounts.partial} points</em>
+                  </div>
+                  <div
+                    className="summary-metric-ring"
+                    style={{
+                      background: `conic-gradient(var(--ring-color) ${summaryPercentages.partial * 3.6}deg, rgba(148, 163, 184, 0.2) 0deg)`,
+                    }}
+                  >
+                    <span>{summaryPercentages.partial}%</span>
+                  </div>
                 </div>
                 <div className="summary-metric summary-metric-custom">
-                  <span>Custom Dev</span>
-                  <strong>
-                    {fsdCoverageCounts.custom} ({summaryPercentages.custom}%)
-                  </strong>
+                  <div className="summary-metric-copy">
+                    <span>Custom Dev</span>
+                    <em>{fsdCoverageCounts.custom} points</em>
+                  </div>
+                  <div
+                    className="summary-metric-ring"
+                    style={{
+                      background: `conic-gradient(var(--ring-color) ${summaryPercentages.custom * 3.6}deg, rgba(148, 163, 184, 0.2) 0deg)`,
+                    }}
+                  >
+                    <span>{summaryPercentages.custom}%</span>
+                  </div>
                 </div>
               </>
             )}
