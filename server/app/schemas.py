@@ -8,6 +8,7 @@ class AnalyzeRequest(BaseModel):
     requirements_list: Optional[list[str]] = None
     top_k: Optional[int] = Field(default=None, ge=1, le=50)
     baseline_name: Optional[str] = None
+    agent_mode: Optional[bool] = None
 
 
 class GapResult(BaseModel):

@@ -44,6 +44,16 @@ curl -X POST http://localhost:8000/analyze \
   -d '{"requirements_text": "Checkout must support Apple Pay\nAdd store locator", "top_k": 10}'
 ```
 
+Agentic analyze (parallel path):
+```bash
+curl -X POST http://localhost:8000/analyze-agentic \
+  -H "Content-Type: application/json" \
+  -d '{"requirements_text": "Checkout must support Apple Pay\nAdd store locator", "top_k": 10}'
+```
+
+Or use `agent_mode: true` on `/analyze`.
+
 ## Notes
 - Chroma persists vectors under `CHROMA_PERSIST_PATH`.
 - Confluence ingest stores last run in `server/.state/confluence_last_run.txt`.
+- Agentic settings: `AGENTIC_DEFAULT`, `AGENTIC_MAX_STEPS`, `AGENTIC_STOP_CONFIDENCE`.

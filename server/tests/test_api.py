@@ -43,6 +43,65 @@ def test_analyze_text(monkeypatch):
     assert data["results"][0]["classification"] == "OOTB Match"
 
 
+def test_analyze_agent_mode_uses_agentic_path(monkeypatch):
+    def fake_agentic(_chroma, requirement, _top_k, max_steps, stop_confidence):
+        class Result:
+            pass
+
+        result = Result()
+        result.requirement = requirement
+        result.classification = "Partial Match"
+        result.confidence = 0.81
+        result.rationale = "Agentic result"
+        result.top_chunks = []
+        result.citations = []
+        result.clarifying_questions = None
+        result.similarity_score = 0.8
+        result.llm_confidence = 0.82
+        result.llm_response = "trace"
+        assert max_steps >= 1
+        assert stop_confidence > 0
+        return result
+
+    monkeypatch.setattr(main, "analyze_requirement_agentic", fake_agentic)
+    client = TestClient(main.app)
+    payload = {"requirements_text": "Enable gift messages", "agent_mode": True}
+    response = client.post("/analyze", json=payload)
+    assert response.status_code == 200
+    data = response.json()
+    assert data["results"][0]["classification"] == "Partial Match"
+    assert data["results"][0]["rationale"] == "Agentic result"
+
+
+def test_analyze_agentic_endpoint_forces_agent_mode(monkeypatch):
+    def fake_agentic(_chroma, requirement, _top_k, max_steps, stop_confidence):
+        class Result:
+            pass
+
+        result = Result()
+        result.requirement = requirement
+        result.classification = "Custom Dev Required"
+        result.confidence = 0.67
+        result.rationale = "Agent endpoint"
+        result.top_chunks = []
+        result.citations = []
+        result.clarifying_questions = None
+        result.similarity_score = 0.66
+        result.llm_confidence = 0.68
+        result.llm_response = "trace"
+        assert max_steps >= 1
+        assert stop_confidence > 0
+        return result
+
+    monkeypatch.setattr(main, "analyze_requirement_agentic", fake_agentic)
+    client = TestClient(main.app)
+    payload = {"requirements_text": "Add loyalty profile fields"}
+    response = client.post("/analyze-agentic", json=payload)
+    assert response.status_code == 200
+    data = response.json()
+    assert data["results"][0]["classification"] == "Custom Dev Required"
+
+
 def test_generate_fsd_docx(monkeypatch):
     monkeypatch.setattr(
         main,

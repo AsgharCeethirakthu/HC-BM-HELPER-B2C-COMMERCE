@@ -25,7 +25,7 @@ from .ingest import IngestDocument, upsert_document_chunks
 
 from .chroma_service import ChromaService
 from .config import settings
-from .gap_analyzer import analyze_requirement
+from .gap_analyzer import analyze_requirement, analyze_requirement_agentic
 from .llm_service import generate_text
 from .fsd_generator import (
     generate_fsd_docx,
@@ -111,6 +111,18 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+def _analyze_single_requirement(requirement: str, top_k: int, agent_mode: bool):
+    if agent_mode:
+        return analyze_requirement_agentic(
+            chroma,
+            requirement,
+            top_k,
+            max_steps=settings.agentic_max_steps,
+            stop_confidence=settings.agentic_stop_confidence,
+        )
+    return analyze_requirement(chroma, requirement, top_k)
 
 
 def fsd_text_to_confluence_html(title: str, fsd_text: str) -> str:
@@ -402,9 +414,10 @@ def analyze(payload: AnalyzeRequest):
         raise HTTPException(status_code=400, detail="requirements_text or requirements_list is required")
 
     top_k = payload.top_k or settings.top_k
+    use_agent_mode = settings.agentic_default if payload.agent_mode is None else payload.agent_mode
     results = []
     for requirement in requirements:
-        gap = analyze_requirement(chroma, requirement, top_k)
+        gap = _analyze_single_requirement(requirement, top_k, use_agent_mode)
         results.append(GapResult(**gap.__dict__))
 
     baseline_summary = None
@@ -436,6 +449,12 @@ def analyze(payload: AnalyzeRequest):
     )
 
 
+@app.post("/analyze-agentic", response_model=AnalyzeResponse)
+def analyze_agentic(payload: AnalyzeRequest):
+    enforced_payload = payload.model_copy(update={"agent_mode": True})
+    return analyze(enforced_payload)
+
+
 @app.post("/analyze-file", response_model=AnalyzeResponse)
 async def analyze_file(file: UploadFile = File(...), top_k: int = Form(None)):
     data = await file.read()
@@ -452,8 +471,9 @@ async def analyze_file(file: UploadFile = File(...), top_k: int = Form(None)):
 
     use_top_k = top_k or settings.top_k
     results = []
+    use_agent_mode = settings.agentic_default
     for requirement in requirements:
-        gap = analyze_requirement(chroma, requirement, use_top_k)
+        gap = _analyze_single_requirement(requirement, use_top_k, use_agent_mode)
         results.append(GapResult(**gap.__dict__))
     return AnalyzeResponse(total=len(results), results=results)
 
@@ -479,7 +499,7 @@ def save_baseline_endpoint(payload: SaveBaselineRequest):
     top_k = payload.top_k or settings.top_k
     results = []
     for requirement in requirements:
-        gap = analyze_requirement(chroma, requirement, top_k)
+        gap = _analyze_single_requirement(requirement, top_k, settings.agentic_default)
         results.append(GapResult(**gap.__dict__).model_dump())
 
     saved = save_baseline(payload.baseline_name, requirements, results)

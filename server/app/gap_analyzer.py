@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import json
 import logging
 from typing import Optional
 
@@ -78,6 +79,70 @@ def _extract_questions(text: str) -> list[str]:
     return questions[:5]
 
 
+def _extract_json_object(raw_text: str) -> dict | None:
+    start = raw_text.find("{")
+    end = raw_text.rfind("}")
+    if start == -1 or end == -1 or end <= start:
+        return None
+    try:
+        payload = json.loads(raw_text[start : end + 1])
+    except Exception:
+        return None
+    if isinstance(payload, dict):
+        return payload
+    return None
+
+
+def _coerce_confidence(value: object) -> Optional[float]:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return max(0.0, min(number, 1.0))
+
+
+def _retrieve_chunks(chroma: ChromaService, query_text: str, top_k: int) -> tuple[list[dict], float]:
+    response = chroma.query(query_text, top_k)
+    documents = response["documents"][0]
+    metadatas = response["metadatas"][0]
+    distances = response["distances"][0]
+
+    chunks: list[dict] = []
+    top_score = 0.0
+    for doc, meta, dist in zip(documents, metadatas, distances):
+        score = _score_from_distance(dist)
+        top_score = max(top_score, score)
+        chunks.append(
+            {
+                "text": doc,
+                "metadata": meta,
+                "score": score,
+            }
+        )
+    return chunks, top_score
+
+
+def _merge_chunks(existing: list[dict], incoming: list[dict], limit: int) -> list[dict]:
+    seen: set[str] = set()
+    merged: list[dict] = []
+    for chunk in existing + incoming:
+        meta = chunk.get("metadata") or {}
+        dedupe_key = "|".join(
+            [
+                str(meta.get("source") or ""),
+                str(meta.get("source_id") or ""),
+                str(meta.get("chunk_index") or ""),
+                (chunk.get("text") or "")[:80],
+            ]
+        )
+        if dedupe_key in seen:
+            continue
+        seen.add(dedupe_key)
+        merged.append(chunk)
+    merged.sort(key=lambda item: item.get("score", 0.0), reverse=True)
+    return merged[:limit]
+
+
 def _generate_clarifying_questions(requirement: str, context: str) -> Optional[list[str]]:
     prompt = (
         "Create 3-5 concise clarifying questions needed to finalize this requirement.\n"
@@ -93,23 +158,7 @@ def _generate_clarifying_questions(requirement: str, context: str) -> Optional[l
 
 
 def analyze_requirement(chroma: ChromaService, requirement: str, top_k: int) -> GapResult:
-    response = chroma.query(requirement, top_k)
-    documents = response["documents"][0]
-    metadatas = response["metadatas"][0]
-    distances = response["distances"][0]
-
-    top_chunks = []
-    top_score = 0.0
-    for doc, meta, dist in zip(documents, metadatas, distances):
-        score = _score_from_distance(dist)
-        top_score = max(top_score, score)
-        top_chunks.append(
-            {
-                "text": doc,
-                "metadata": meta,
-                "score": score,
-            }
-        )
+    top_chunks, top_score = _retrieve_chunks(chroma, requirement, top_k)
 
     classification = _classify_from_score(top_score)
     similarity_confidence = top_score
@@ -179,3 +228,110 @@ def analyze_requirement(chroma: ChromaService, requirement: str, top_k: int) -> 
         citations=citations,
         clarifying_questions=clarifying_questions,
     )
+
+
+def analyze_requirement_agentic(
+    chroma: ChromaService,
+    requirement: str,
+    top_k: int,
+    max_steps: int = 3,
+    stop_confidence: float = 0.75,
+) -> GapResult:
+    """
+    Agentic multi-step analysis with strict fallback to the baseline analyzer.
+    """
+    try:
+        max_steps = max(1, min(max_steps, 6))
+        retrieved_chunks, top_score = _retrieve_chunks(chroma, requirement, top_k)
+        if not retrieved_chunks:
+            return analyze_requirement(chroma, requirement, top_k)
+
+        working_chunks = retrieved_chunks[:]
+        llm_trace: list[str] = []
+        llm_confidence: Optional[float] = None
+        classification = _classify_from_score(top_score)
+        rationale = "Similarity-based classification"
+        clarifying_questions: Optional[list[str]] = None
+        explored_queries = {requirement.strip().lower()}
+
+        for step in range(max_steps):
+            context = "\n\n".join([chunk["text"][:800] for chunk in working_chunks[:4]])
+            prompt = (
+                "You are an SFRA requirement analysis agent.\n"
+                "Decide next best action based on current evidence.\n"
+                "Return ONLY valid JSON with keys:\n"
+                "classification: one of [OOTB Match, Partial Match, Custom Dev Required, Open Question]\n"
+                "confidence: number 0..1\n"
+                "rationale: short text\n"
+                "next_action: one of [retrieve, clarify, finalize]\n"
+                "next_query: string (required only for retrieve)\n"
+                "clarifying_question: string (required only for clarify)\n\n"
+                f"Requirement: {requirement}\n"
+                f"Step: {step + 1}/{max_steps}\n"
+                f"Current top evidence count: {len(working_chunks)}\n"
+                f"Current evidence:\n{context}\n"
+            )
+            response_text = generate_text(prompt).strip()
+            llm_trace.append(response_text)
+            payload = _extract_json_object(response_text)
+            if not payload:
+                break
+
+            candidate = str(payload.get("classification") or "").strip()
+            if candidate in {"OOTB Match", "Partial Match", "Custom Dev Required", "Open Question"}:
+                classification = candidate
+            llm_confidence = _coerce_confidence(payload.get("confidence"))
+            if payload.get("rationale"):
+                rationale = str(payload["rationale"]).strip()
+
+            confidence = _combine_confidence(top_score, llm_confidence)
+            next_action = str(payload.get("next_action") or "finalize").strip().lower()
+            if next_action == "clarify":
+                question = str(payload.get("clarifying_question") or "").strip()
+                if question:
+                    clarifying_questions = [question]
+                if confidence >= stop_confidence:
+                    break
+                next_action = "finalize"
+
+            if next_action == "retrieve":
+                next_query = str(payload.get("next_query") or "").strip()
+                if not next_query:
+                    break
+                normalized = next_query.lower()
+                if normalized in explored_queries:
+                    break
+                explored_queries.add(normalized)
+                new_chunks, new_top = _retrieve_chunks(chroma, next_query, top_k)
+                top_score = max(top_score, new_top)
+                working_chunks = _merge_chunks(working_chunks, new_chunks, limit=max(top_k, 10))
+                continue
+
+            if next_action == "finalize":
+                break
+
+        final_confidence = _combine_confidence(top_score, llm_confidence)
+        citations = _build_citations(working_chunks)
+
+        if not clarifying_questions and (classification == "Open Question" or final_confidence < 0.5):
+            try:
+                context = "\n\n".join([chunk["text"][:800] for chunk in working_chunks[:3]])
+                clarifying_questions = _generate_clarifying_questions(requirement, context)
+            except Exception as exc:
+                logger.warning("LLM questions failed: %s", exc)
+
+        return GapResult(
+            requirement=requirement,
+            classification=classification,
+            confidence=round(final_confidence, 3),
+            top_chunks=working_chunks,
+            rationale=rationale,
+            similarity_score=round(top_score, 3),
+            llm_confidence=llm_confidence,
+            llm_response="\n\n".join(llm_trace) if llm_trace else None,
+            citations=citations,
+            clarifying_questions=clarifying_questions,
+        )
+    except Exception as exc:
+        logger.warning("Agentic analyze failed, falling back to baseline: %s", exc)
+        return analyze_requirement(chroma, requirement, top_k)

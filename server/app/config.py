@@ -33,6 +33,9 @@ class Settings(BaseSettings):
     rerank_enabled: bool = True
     rerank_candidates: int = 45
     rerank_lexical_weight: float = 0.25
+    agentic_default: bool = False
+    agentic_max_steps: int = 3
+    agentic_stop_confidence: float = 0.75
     cors_allow_origins: str = ""
 
 

@@ -76,9 +76,11 @@ NEXT_PUBLIC_API_BASE=http://localhost:8000
 - `POST /health`
 - `POST /query`
 - `POST /analyze`
+- `POST /analyze-agentic`
 - `POST /analyze-file`
 - `POST /generate-fsd`
 
 ## Notes
 - ChromaDB is configured for persistent storage. Back up the persistence folder if needed.
 - Gemini model and chunk sizes are configurable via `.env`.
+- Agentic analyze can run in parallel via `agent_mode=true` or `/analyze-agentic`.
