@@ -18,6 +18,7 @@ import {
   generateFsd,
   generateFsdDocx,
   generateFsdDocxFromText,
+  ingestConfluence,
   getConfluenceIngestStatus,
   startConfluenceIngest,
   saveFsdToConfluence,
@@ -1265,7 +1266,31 @@ export default function AnalyzerApp() {
     setIngestStatusText("Queued for ingestion...");
     setActionNotice("Ingestion started.");
     try {
-      const started = await startConfluenceIngest();
+      let started: { job_id: string; status: string } | null = null;
+      try {
+        started = await startConfluenceIngest();
+      } catch (startErr) {
+        const message = startErr instanceof Error ? startErr.message : "";
+        const isNotFound = message.includes("Not Found") || message.includes("404");
+        if (!isNotFound) throw startErr;
+
+        // Fallback for older backend versions that only expose sync ingest endpoint.
+        setIngestStatusText("Running ingestion on legacy endpoint...");
+        setIngestProgress(35);
+        const legacy = await ingestConfluence();
+        setIngestProgress(100);
+        setIngestStatusText("Ingestion completed.");
+        setDataSourceNotice(
+          `Ingestion completed: ${legacy.pages} pages scanned, ${legacy.pages} indexed, 0 skipped, ${legacy.chunks} chunks stored.`
+        );
+        setActionNotice(`Data ingestion completed: ${legacy.pages}/${legacy.pages} pages indexed, ${legacy.chunks} chunks.`);
+        setIsIngestingDataSources(false);
+        return;
+      }
+
+      if (!started) {
+        throw new Error("Failed to start ingestion job.");
+      }
       setIngestJobId(started.job_id);
       const pollStatus = async () => {
         const status = await getConfluenceIngestStatus(started.job_id);
@@ -1487,7 +1512,12 @@ export default function AnalyzerApp() {
             <div className="history-header">
               <div className="flex w-full items-center justify-between gap-2">
                 <h2 className={`section-title !tracking-[0.2em] ${!isHistoryCollapsed ? "threads-fall-in" : ""}`}>
-                  Threads
+                  <span className="section-title-with-icon">
+                    <svg viewBox="0 0 24 24" aria-hidden="true" className="section-title-icon">
+                      <path d="M5 7h14M5 12h14M5 17h10" />
+                    </svg>
+                    <span>Threads</span>
+                  </span>
                 </h2>
                 <button
                   className="rounded-full border border-obsidian/15 bg-white px-2.5 py-1 text-[0.68rem] font-semibold text-obsidian/70"
@@ -1777,7 +1807,14 @@ export default function AnalyzerApp() {
           ) : (
             <>
               <div className="chat-panel-header">
-                <p className="section-title">Requirements Analysis</p>
+                <p className="section-title">
+                  <span className="section-title-with-icon">
+                    <svg viewBox="0 0 24 24" aria-hidden="true" className="section-title-icon">
+                      <path d="M4 6h16v10H8l-4 4V6Z" />
+                    </svg>
+                    <span>Requirements Analysis</span>
+                  </span>
+                </p>
               </div>
 
               <div className={`chat-transcript ${isDiscussionIdle ? "chat-transcript-empty" : ""}`} ref={chatScrollRef}>
@@ -2188,10 +2225,17 @@ export default function AnalyzerApp() {
           aria-label="Summary and analysis"
           ref={summaryDrawerRef}
         >
-          <div className="summary-header">
-            <div>
-              <p className="section-title">FSD Builder</p>
-            </div>
+            <div className="summary-header">
+              <div>
+              <p className="section-title">
+                <span className="section-title-with-icon">
+                  <svg viewBox="0 0 24 24" aria-hidden="true" className="section-title-icon">
+                    <path d="M7 4h8l4 4v12H7V4Zm8 0v4h4M9 12h8M9 15h8M9 18h5" />
+                  </svg>
+                  <span>FSD Builder</span>
+                </span>
+              </p>
+              </div>
             <button
               className="icon-chip lg:hidden"
               onClick={() => setIsMobileSummaryOpen(false)}

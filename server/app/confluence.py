@@ -63,10 +63,17 @@ def search_pages(space_keys: Iterable[str], cql_extra: str = "") -> list[str]:
     cql = " AND ".join(cql_parts)
 
     ids: list[str] = []
+    seen_ids: set[str] = set()
     start = 0
     limit = 50
+    max_iterations = 500
+    iterations = 0
     with _client() as client:
         while True:
+            iterations += 1
+            if iterations > max_iterations:
+                # Defensive guard against upstream pagination loops.
+                break
             response = client.get(
                 "/rest/api/content/search",
                 params={
@@ -79,7 +86,17 @@ def search_pages(space_keys: Iterable[str], cql_extra: str = "") -> list[str]:
             response.raise_for_status()
             payload = response.json()
             results = payload.get("results", [])
-            ids.extend([item["id"] for item in results])
+            new_count = 0
+            for item in results:
+                page_id = str(item.get("id", "")).strip()
+                if not page_id or page_id in seen_ids:
+                    continue
+                seen_ids.add(page_id)
+                ids.append(page_id)
+                new_count += 1
+            # If API keeps returning duplicates, do not spin forever.
+            if new_count == 0:
+                break
             if len(results) < limit:
                 break
             start += limit
