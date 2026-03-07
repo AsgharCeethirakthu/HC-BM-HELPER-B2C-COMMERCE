@@ -84,18 +84,32 @@ export default function GatePage() {
           </div>
         </div>
 
-        <div className="rounded-3xl border border-signal/15 bg-[linear-gradient(155deg,rgba(31,42,68,0.96),rgba(37,99,235,0.92))] p-6 text-white shadow-[0_22px_48px_rgba(31,42,68,0.24)] sm:p-8">
-          <p className="text-xs font-semibold uppercase tracking-[0.16em] text-white/70">What you get</p>
-          <h2 className="mt-2 text-xl font-semibold leading-tight sm:text-2xl">Requirement clarity, faster delivery.</h2>
-          <div className="mt-5 grid gap-3 text-sm text-white/85">
-            <div className="rounded-2xl border border-white/15 bg-white/10 p-3">
-              Analyze requirement coverage with evidence-backed classification.
+        <div className="relative overflow-hidden rounded-3xl border border-signal/15 bg-[linear-gradient(155deg,rgba(19,34,60,0.98),rgba(37,99,235,0.94))] p-6 text-white shadow-[0_24px_54px_rgba(18,34,60,0.32)] sm:p-8">
+          <div className="pointer-events-none absolute -right-10 -top-10 h-44 w-44 rounded-full bg-cyan-300/25 blur-3xl" aria-hidden="true" />
+          <div className="pointer-events-none absolute -left-14 -bottom-20 h-56 w-56 rounded-full bg-sky-300/20 blur-3xl" aria-hidden="true" />
+
+          <p className="relative text-xs font-semibold uppercase tracking-[0.16em] text-white/75">What you get</p>
+          <h2 className="relative mt-2 text-xl font-semibold leading-tight sm:text-2xl">
+            Requirement clarity with an AI copilot.
+          </h2>
+
+          <div className="relative mt-4 flex justify-center">
+            <img
+              src="/mascot/gate-mascot.png"
+              alt="Scout mascot guiding sign in"
+              className="h-56 w-auto drop-shadow-[0_18px_34px_rgba(26,208,255,0.35)] sm:h-72"
+            />
+          </div>
+
+          <div className="relative mt-4 grid gap-2 text-sm text-white/90">
+            <div className="rounded-2xl border border-white/18 bg-white/10 p-3">
+              Analyze requirements with evidence-backed output.
             </div>
-            <div className="rounded-2xl border border-white/15 bg-white/10 p-3">
-              Keep threads organized by project and save workspace state.
+            <div className="rounded-2xl border border-white/18 bg-white/10 p-3">
+              Keep project threads structured and searchable.
             </div>
-            <div className="rounded-2xl border border-white/15 bg-white/10 p-3">
-              Build and export FSD drafts directly from guided analysis.
+            <div className="rounded-2xl border border-white/18 bg-white/10 p-3">
+              Generate FSD drafts ready for review.
             </div>
           </div>
         </div>
