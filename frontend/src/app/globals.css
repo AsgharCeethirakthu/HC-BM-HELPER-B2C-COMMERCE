@@ -241,6 +241,14 @@ body {
   background: rgba(15, 23, 42, 0.035);
 }
 
+.history-project-create-panel {
+  margin-bottom: 0.5rem;
+  padding: 0.45rem;
+  border: 1px solid rgba(37, 99, 235, 0.18);
+  border-radius: 0.8rem;
+  background: rgba(37, 99, 235, 0.08);
+}
+
 .history-folder-add-btn {
   @apply inline-flex h-8 w-8 items-center justify-center rounded-full border border-obsidian/15 bg-white text-obsidian/70 transition-all duration-150;
   box-shadow: 0 4px 10px rgba(15, 23, 42, 0.06);
@@ -287,13 +295,19 @@ body {
 
 .history-project-filters {
   margin-top: 0.5rem;
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.35rem;
+  display: grid;
+  gap: 0.3rem;
+}
+
+.history-project-filter-label {
+  @apply text-[0.62rem] font-semibold uppercase tracking-[0.12em] text-obsidian/55;
+}
+
+.history-project-filter-select {
+  @apply w-full rounded-xl border border-obsidian/15 bg-white px-3 py-2 text-xs text-obsidian/80 focus:outline-none focus:ring-2 focus:ring-signal/30;
 }
 
 .history-create-row {
-  margin-top: 0.5rem;
   display: grid;
   grid-template-columns: 1fr;
   gap: 0.35rem;
@@ -306,12 +320,26 @@ body {
   gap: 0.45rem;
 }
 
-.history-project-add-btn {
-  @apply inline-flex rounded-full border border-signal/25 bg-white px-2 py-0.5 text-[0.62rem] font-semibold text-signal transition-colors;
+.history-project-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
 }
 
-.history-project-add-btn:hover {
+.history-project-icon-btn {
+  @apply inline-flex h-6 w-6 items-center justify-center rounded-full border border-signal/25 bg-white text-signal transition-colors;
+}
+
+.history-project-icon-btn:hover {
   @apply bg-signal/10 border-signal/30;
+}
+
+.history-project-icon-btn.delete {
+  @apply border-rose/30 text-rose/85;
+}
+
+.history-project-icon-btn.delete:hover {
+  @apply border-rose/40 bg-rose/10 text-rose;
 }
 
 .history-project-filter-chip {

@@ -122,6 +122,7 @@ const STARTER_PROMPTS = [
 
 const GUIDED_MAX_STEPS = 3;
 const DATA_SOURCE_STORAGE_KEY = "scout.dataSources.v1";
+const DEFAULT_PROJECT_NAME = "General";
 const DEFAULT_BASELINE_LINKS: DataSourceLink[] = [
   {
     id: crypto.randomUUID(),
@@ -481,7 +482,7 @@ const getProjectsFromThread = (thread: ChatThread) => {
   return Array.from(projects);
 };
 
-const getPrimaryThreadProject = (thread: ChatThread) => thread.projectTag?.trim() || "No Project";
+const getPrimaryThreadProject = (thread: ChatThread) => thread.projectTag?.trim() || DEFAULT_PROJECT_NAME;
 
 const lineToHeading = (line: string) => {
   const trimmed = line.trim();
@@ -498,11 +499,12 @@ const lineToHeading = (line: string) => {
 const createThread = (seed?: string, projectTag?: string | null): ChatThread => {
   const now = new Date().toISOString();
   const title = seed ? firstMeaningfulLine(seed).slice(0, 60) : "New scope discussion";
+  const normalizedProjectTag = projectTag?.trim() || DEFAULT_PROJECT_NAME;
   return {
     id: crypto.randomUUID(),
     title,
     updatedAt: now,
-    projectTag: projectTag || null,
+    projectTag: normalizedProjectTag,
     messages: [
       {
         id: crypto.randomUUID(),
@@ -705,16 +707,14 @@ export default function AnalyzerApp() {
         if (project.trim()) set.add(project.trim());
       }
     }
-    if (threads.some((thread) => !thread.projectTag?.trim())) {
-      set.add("No Project");
-    }
+    set.add(DEFAULT_PROJECT_NAME);
     return Array.from(set).sort((a, b) => a.localeCompare(b));
   }, [threads, projects]);
 
   const groupedThreads = useMemo(() => {
     const groups = new Map<string, ChatThread[]>();
-    for (const project of knownProjects) {
-      if (project !== "No Project") {
+    if (projectFilter === "All") {
+      for (const project of knownProjects) {
         groups.set(project, []);
       }
     }
@@ -724,12 +724,8 @@ export default function AnalyzerApp() {
       items.push(thread);
       groups.set(key, items);
     }
-    return Array.from(groups.entries()).sort((a, b) => {
-      if (a[0] === "No Project") return 1;
-      if (b[0] === "No Project") return -1;
-      return a[0].localeCompare(b[0]);
-    });
-  }, [projectFilteredThreads, knownProjects]);
+    return Array.from(groups.entries()).sort((a, b) => a[0].localeCompare(b[0]));
+  }, [projectFilteredThreads, knownProjects, projectFilter]);
 
   const closeOverlays = () => {
     setIsMobileHistoryOpen(false);
@@ -788,7 +784,7 @@ export default function AnalyzerApp() {
               projectTag:
                 typeof thread.project_id === "string" && thread.project_id.trim()
                   ? thread.project_id.trim()
-                  : null,
+                  : DEFAULT_PROJECT_NAME,
               messages:
                 messages.length > 0
                   ? messages
@@ -797,7 +793,11 @@ export default function AnalyzerApp() {
           })
           .filter((thread) => !!thread.id);
 
-        setProjects(loadedProjects);
+        setProjects(
+          loadedProjects.some((project) => project.toLowerCase() === DEFAULT_PROJECT_NAME.toLowerCase())
+            ? loadedProjects
+            : [DEFAULT_PROJECT_NAME, ...loadedProjects]
+        );
         if (loadedThreads.length > 0) {
           setThreads(loadedThreads);
           setActiveThreadId(loadedThreads[0].id);
@@ -827,7 +827,7 @@ export default function AnalyzerApp() {
           id: thread.id,
           title: thread.title,
           updated_at: thread.updatedAt,
-          project_id: thread.projectTag || null,
+          project_id: thread.projectTag || DEFAULT_PROJECT_NAME,
           messages: thread.messages as Array<Record<string, unknown>>,
         })),
       }, sessionEmail).catch(() => {
@@ -1007,9 +1007,9 @@ export default function AnalyzerApp() {
     const cleanedTitle = newThreadTitleDraft.trim();
     const cleanedProject = newThreadProjectDraft.trim();
     const fallbackProject =
-      projectFilter !== "All" && projectFilter !== "No Project"
+      projectFilter !== "All"
         ? projectFilter
-        : activeThread?.projectTag || null;
+        : activeThread?.projectTag || DEFAULT_PROJECT_NAME;
     const thread = createThread(cleanedTitle || undefined, cleanedProject || fallbackProject);
     if (thread.projectTag?.trim()) {
       setProjects((prev) => {
@@ -1048,8 +1048,7 @@ export default function AnalyzerApp() {
   };
 
   const startThreadInProject = (projectName: string) => {
-    const projectTag = projectName === "No Project" ? null : projectName;
-    const thread = createThread(undefined, projectTag);
+    const thread = createThread(undefined, projectName);
     setThreads((prev) => [thread, ...prev]);
     setActiveThreadId(thread.id);
     setIntroAnimationThreadId(thread.id);
@@ -1064,6 +1063,69 @@ export default function AnalyzerApp() {
     }, 950);
   };
 
+  const handleDeleteProject = (projectName: string) => {
+    if (projectName.trim().toLowerCase() === DEFAULT_PROJECT_NAME.toLowerCase()) return;
+    const confirmed = window.confirm(`Delete project "${projectName}"? Threads will be kept and moved to ${DEFAULT_PROJECT_NAME}.`);
+    if (!confirmed) return;
+    const normalizedProject = projectName.trim().toLowerCase();
+
+    setProjects((prev) => {
+      const filtered = prev.filter((project) => project.trim().toLowerCase() !== normalizedProject);
+      const hasDefault = filtered.some((project) => project.trim().toLowerCase() === DEFAULT_PROJECT_NAME.toLowerCase());
+      return hasDefault ? filtered : [DEFAULT_PROJECT_NAME, ...filtered];
+    });
+    setThreads((prev) =>
+      prev.map((thread) =>
+        (() => {
+          let changed = false;
+          let nextProjectTag = thread.projectTag;
+          if (thread.projectTag?.trim().toLowerCase() === normalizedProject) {
+            nextProjectTag = DEFAULT_PROJECT_NAME;
+            changed = true;
+          }
+
+          const nextMessages = thread.messages.map((message) => {
+            if (!message.analysisResults?.length) return message;
+            let messageChanged = false;
+            const nextResults = message.analysisResults.map((item) => {
+              if (!item.top_chunks?.length) return item;
+              let itemChanged = false;
+              const nextChunks = item.top_chunks.map((chunk) => {
+                const metadata = chunk.metadata || {};
+                const metaProject = typeof metadata.project === "string" ? metadata.project.trim().toLowerCase() : "";
+                const metaSpaceKey = typeof metadata.space_key === "string" ? metadata.space_key.trim().toLowerCase() : "";
+                if (metaProject !== normalizedProject && metaSpaceKey !== normalizedProject) {
+                  return chunk;
+                }
+                itemChanged = true;
+                const nextMetadata = { ...metadata };
+                if (metaProject === normalizedProject) nextMetadata.project = "";
+                if (metaSpaceKey === normalizedProject) nextMetadata.space_key = "";
+                return { ...chunk, metadata: nextMetadata };
+              });
+              if (!itemChanged) return item;
+              messageChanged = true;
+              return { ...item, top_chunks: nextChunks };
+            });
+            if (!messageChanged) return message;
+            changed = true;
+            return { ...message, analysisResults: nextResults };
+          });
+
+          if (!changed) return thread;
+          return {
+            ...thread,
+            projectTag: nextProjectTag,
+            messages: nextMessages,
+            updatedAt: new Date().toISOString(),
+          };
+        })()
+      )
+    );
+    setProjectFilter((prev) => (prev.trim().toLowerCase() === normalizedProject ? "All" : prev));
+    setActionNotice(`Deleted project "${projectName}".`);
+  };
+
   const handleRenameThread = (threadId: string) => {
     const current = threads.find((thread) => thread.id === threadId);
     if (!current) return;
@@ -1076,20 +1138,19 @@ export default function AnalyzerApp() {
     const cleaned = renameDraft.trim();
     if (!cleaned) return;
     const cleanedProject = renameProjectDraft.trim();
-    if (cleanedProject) {
-      setProjects((prev) => {
-        const exists = prev.some((project) => project.toLowerCase() === cleanedProject.toLowerCase());
-        if (exists) return prev;
-        return [...prev, cleanedProject];
-      });
-    }
+    const normalizedProject = cleanedProject || DEFAULT_PROJECT_NAME;
+    setProjects((prev) => {
+      const exists = prev.some((project) => project.toLowerCase() === normalizedProject.toLowerCase());
+      if (exists) return prev;
+      return [...prev, normalizedProject];
+    });
     setThreads((prev) =>
       prev.map((thread) =>
         thread.id === threadId
           ? {
               ...thread,
               title: cleaned.slice(0, 80),
-              projectTag: cleanedProject || null,
+              projectTag: normalizedProject,
               updatedAt: new Date().toISOString(),
             }
           : thread
@@ -2064,6 +2125,28 @@ export default function AnalyzerApp() {
             </div>
 
             <div className="history-search-wrap">
+              {isAddProjectOpen && (
+                <div className="history-project-create-panel">
+                  <div className="history-create-row">
+                    <input
+                      value={newProjectDraft}
+                      onChange={(event) => setNewProjectDraft(event.target.value)}
+                      className="history-search-input"
+                      placeholder="Project name (e.g. SFCC)"
+                      aria-label="New project name"
+                      onKeyDown={(event) => {
+                        if (event.key === "Enter") {
+                          event.preventDefault();
+                          addProject();
+                        }
+                      }}
+                    />
+                    <button className="history-project-filter-chip active" onClick={addProject} type="button">
+                      Add Project
+                    </button>
+                  </div>
+                </div>
+              )}
               <input
                 value={threadSearch}
                 onChange={(event) => setThreadSearch(event.target.value)}
@@ -2071,37 +2154,23 @@ export default function AnalyzerApp() {
                 placeholder="Search thread or project..."
                 aria-label="Search threads by project or title"
               />
-              {isAddProjectOpen && (
-                <div className="history-create-row">
-                  <input
-                    value={newProjectDraft}
-                    onChange={(event) => setNewProjectDraft(event.target.value)}
-                    className="history-search-input"
-                    placeholder="Project name (e.g. SFCC)"
-                    aria-label="New project name"
-                    onKeyDown={(event) => {
-                      if (event.key === "Enter") {
-                        event.preventDefault();
-                        addProject();
-                      }
-                    }}
-                  />
-                  <button className="history-project-filter-chip active" onClick={addProject} type="button">
-                    Add Project
-                  </button>
-                </div>
-              )}
               <div className="history-project-filters">
-                {["All", ...knownProjects].map((project) => (
-                  <button
-                    key={`project-filter-${project}`}
-                    className={`history-project-filter-chip ${projectFilter === project ? "active" : ""}`}
-                    onClick={() => setProjectFilter(project)}
-                    type="button"
-                  >
-                    {project}
-                  </button>
-                ))}
+                <label htmlFor="project-filter-select" className="history-project-filter-label">
+                  Filter by project
+                </label>
+                <select
+                  id="project-filter-select"
+                  value={projectFilter}
+                  onChange={(event) => setProjectFilter(event.target.value)}
+                  className="history-project-filter-select"
+                  aria-label="Filter threads by project"
+                >
+                  {["All", ...knownProjects].map((project) => (
+                    <option key={`project-filter-${project}`} value={project}>
+                      {project}
+                    </option>
+                  ))}
+                </select>
               </div>
             </div>
 
@@ -2112,14 +2181,46 @@ export default function AnalyzerApp() {
                     <p className="px-1 text-[0.62rem] font-semibold uppercase tracking-[0.14em] text-obsidian/45">
                       {projectGroup}
                     </p>
-                    <button
-                      className="history-project-add-btn"
-                      type="button"
-                      onClick={() => startThreadInProject(projectGroup)}
-                      aria-label={`Add thread in ${projectGroup}`}
-                    >
-                      + Thread
-                    </button>
+                    <div className="history-project-actions">
+                      {projectGroup.trim().toLowerCase() !== DEFAULT_PROJECT_NAME.toLowerCase() && (
+                        <button
+                          className="history-project-icon-btn delete"
+                          type="button"
+                          onClick={() => handleDeleteProject(projectGroup)}
+                          aria-label={`Delete project ${projectGroup}`}
+                          title={`Delete project ${projectGroup}`}
+                        >
+                          <svg viewBox="0 0 24 24" aria-hidden="true" className="h-3.5 w-3.5">
+                            <path
+                              d="M5 7h14M9 7V5h6v2m-7 0 1 12h6l1-12"
+                              fill="none"
+                              stroke="currentColor"
+                              strokeWidth="1.9"
+                              strokeLinecap="round"
+                              strokeLinejoin="round"
+                            />
+                          </svg>
+                        </button>
+                      )}
+                      <button
+                        className="history-project-icon-btn"
+                        type="button"
+                        onClick={() => startThreadInProject(projectGroup)}
+                        aria-label={`Add thread in ${projectGroup}`}
+                        title={`Add thread in ${projectGroup}`}
+                      >
+                        <svg viewBox="0 0 24 24" aria-hidden="true" className="h-3.5 w-3.5">
+                          <path
+                            d="M12 5v14M5 12h14"
+                            fill="none"
+                            stroke="currentColor"
+                            strokeWidth="2"
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                          />
+                        </svg>
+                      </button>
+                    </div>
                   </div>
                   {groupThreads.map((thread) => {
                     const threadProjects = getProjectsFromThread(thread);
