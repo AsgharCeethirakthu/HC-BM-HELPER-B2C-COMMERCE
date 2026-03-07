@@ -264,7 +264,7 @@ body {
 }
 
 .history-project-filter-chip.active {
-  @apply border-signal/35 bg-signal/12 text-signal;
+  @apply border-signal/35 bg-signal/10 text-signal;
 }
 
 .history-list {
