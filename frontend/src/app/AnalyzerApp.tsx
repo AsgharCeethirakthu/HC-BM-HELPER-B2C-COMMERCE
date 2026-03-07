@@ -3291,7 +3291,7 @@ export default function AnalyzerApp() {
             <button
               onClick={() => void handleOpenFsdPreview()}
               disabled={fsdPreviewLoading || !latestAnalysisResults.length}
-              className="inline-flex w-full items-center justify-center gap-2 rounded-full bg-steel px-4 py-2.5 text-[0.84rem] font-semibold text-white disabled:cursor-not-allowed disabled:opacity-60"
+              className="fsd-sidebar-action-btn inline-flex w-full items-center justify-center gap-2 rounded-full bg-steel text-[0.84rem] font-semibold text-white disabled:cursor-not-allowed disabled:opacity-60"
             >
               {fsdPreviewLoading ? (
                 <>
@@ -3312,7 +3312,7 @@ export default function AnalyzerApp() {
                 <button
                   onClick={() => void handleExportDocx()}
                   disabled={loading || !fsdPreviewDraft.trim()}
-                  className="mt-2 inline-flex w-full items-center justify-center gap-2 rounded-full bg-mint px-4 py-2.5 text-[0.84rem] font-semibold text-white disabled:cursor-not-allowed disabled:opacity-60"
+                  className="fsd-sidebar-action-btn mt-2 inline-flex w-full items-center justify-center gap-2 rounded-full bg-mint text-[0.84rem] font-semibold text-white disabled:cursor-not-allowed disabled:opacity-60"
                 >
                   {loading ? (
                     "Preparing..."
@@ -3330,7 +3330,7 @@ export default function AnalyzerApp() {
                 <button
                   onClick={() => void openConfluenceModal()}
                   disabled={loading || !fsdPreviewDraft.trim()}
-                  className="mt-2 inline-flex w-full items-center justify-center gap-2 rounded-full bg-signal px-4 py-2.5 text-[0.84rem] font-semibold text-white disabled:cursor-not-allowed disabled:opacity-60"
+                  className="fsd-sidebar-action-btn mt-2 inline-flex w-full items-center justify-center gap-2 rounded-full bg-signal text-[0.84rem] font-semibold text-white disabled:cursor-not-allowed disabled:opacity-60"
                 >
                   <svg viewBox="0 0 24 24" aria-hidden="true" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="2">
                     <path d="M8 6h8l4 4v8H8V6Z" />
@@ -3341,10 +3341,10 @@ export default function AnalyzerApp() {
                 </button>
               </>
             )}
-            <p className="mt-2 text-center text-[0.7rem] text-obsidian/55">
-              Open preview to review outline and access export/save actions.
-            </p>
           </div>
+          <p className="mt-2 pb-[5px] text-center text-[0.7rem] text-obsidian/55">
+            Open preview to review outline and access export/save actions.
+          </p>
         </aside>
       </section>
 

@@ -58,6 +58,20 @@ nav a { color: #2a3a4f; text-decoration: none; font-weight: 600; font-size: 0.95
   padding: clamp(18px, 3vw, 34px);
 }
 
+.chat-panel,
+.history-panel,
+.summary-panel {
+  border-radius: 0.5rem;
+  border-width: 1px;
+  border-color: rgb(37 99 235 / 40%);
+  background-color: hsla(0, 0%, 100%, 0.9);
+  --tw-backdrop-blur: blur(8px);
+  backdrop-filter: var(--tw-backdrop-blur) var(--tw-backdrop-brightness) var(--tw-backdrop-contrast) var(--tw-backdrop-grayscale) var(--tw-backdrop-hue-rotate) var(--tw-backdrop-invert) var(--tw-backdrop-opacity) var(--tw-backdrop-saturate) var(--tw-backdrop-sepia);
+  box-shadow: 0 18px 42px rgba(29, 78, 216, 0.12);
+  min-height: 0;
+  overflow: hidden;
+}
+
 .hero {
   display: grid;
   grid-template-columns: 1.02fr 0.98fr;

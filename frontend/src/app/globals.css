@@ -205,7 +205,21 @@ body {
 .history-panel,
 .chat-panel,
 .summary-panel {
-  @apply rounded-3xl border border-signal/20 bg-white/90 backdrop-blur;
+  border-radius: 0.5rem;
+  border-width: 1px;
+  border-color: rgb(37 99 235 / 40%);
+  background-color: hsla(0, 0%, 100%, 0.9);
+  --tw-backdrop-blur: blur(8px);
+  backdrop-filter:
+    var(--tw-backdrop-blur)
+    var(--tw-backdrop-brightness)
+    var(--tw-backdrop-contrast)
+    var(--tw-backdrop-grayscale)
+    var(--tw-backdrop-hue-rotate)
+    var(--tw-backdrop-invert)
+    var(--tw-backdrop-opacity)
+    var(--tw-backdrop-saturate)
+    var(--tw-backdrop-sepia);
   box-shadow: 0 18px 42px rgba(29, 78, 216, 0.12);
   min-height: 0;
   overflow: hidden;
@@ -2099,8 +2113,14 @@ body {
   border-bottom-left-radius: 1.5rem;
   border-bottom-right-radius: 1.5rem;
   flex-shrink: 0;
-  padding-bottom: calc(0.75rem + env(safe-area-inset-bottom));
+  padding-left: 5rem;
+  padding-right: 5rem;
+  padding-bottom: calc(0.2rem + env(safe-area-inset-bottom));
   box-shadow: 0 -8px 20px rgba(11, 18, 32, 0.05);
+}
+
+.fsd-sidebar-action-btn {
+  padding: 0.72rem 1.1rem;
 }
 
 .preview-loader-icon {
@@ -2403,7 +2423,7 @@ body {
     z-index: 30;
     transform: translateX(-110%);
     transition: transform 180ms ease;
-    border-radius: 1.25rem;
+    border-radius: 0.5rem;
   }
 
   .history-panel {
@@ -2423,7 +2443,7 @@ body {
 
   .chat-panel {
     min-height: calc(100dvh - 7rem);
-    border-radius: 1.25rem;
+    border-radius: 0.5rem;
   }
 
   .chat-panel-header,
@@ -2515,7 +2535,7 @@ body {
 
   .summary-export {
     padding: 0.7rem;
-    padding-bottom: calc(0.75rem + env(safe-area-inset-bottom));
+    padding-bottom: calc(0.2rem + env(safe-area-inset-bottom));
   }
 
   .chat-bubble {
@@ -2563,7 +2583,7 @@ body {
   }
 
   .chat-panel {
-    border-radius: 1rem;
+    border-radius: 0.5rem;
   }
 
   .chat-transcript {
