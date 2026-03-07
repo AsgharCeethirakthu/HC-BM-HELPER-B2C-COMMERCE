@@ -47,22 +47,41 @@ def load_workspace_state(user_email: str) -> dict[str, Any]:
             (normalized_email,),
         ).fetchone()
         if not row:
-            return {"threads": []}
+            return {"projects": [], "threads": []}
         try:
             payload = json.loads(str(row["payload_json"]))
         except Exception:
-            return {"threads": []}
+            return {"projects": [], "threads": []}
     if not isinstance(payload, dict):
-        return {"threads": []}
+        return {"projects": [], "threads": []}
+    projects = payload.get("projects")
+    if not isinstance(projects, list):
+        projects = []
+    projects = [str(item).strip() for item in projects if isinstance(item, str) and str(item).strip()]
     threads = payload.get("threads")
     if not isinstance(threads, list):
-        return {"threads": []}
-    return {"threads": threads}
+        return {"projects": projects, "threads": []}
+    return {"projects": projects, "threads": threads}
 
 
 def save_workspace_state(user_email: str, state: dict[str, Any], updated_at: str) -> dict[str, Any]:
     normalized_email = _normalize_user_email(user_email)
-    payload = {"threads": state.get("threads", [])}
+    raw_projects = state.get("projects", [])
+    projects: list[str] = []
+    if isinstance(raw_projects, list):
+        seen: set[str] = set()
+        for item in raw_projects:
+            if not isinstance(item, str):
+                continue
+            cleaned = item.strip()
+            if not cleaned:
+                continue
+            key = cleaned.lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            projects.append(cleaned)
+    payload = {"projects": projects, "threads": state.get("threads", [])}
     serialized = json.dumps(payload, ensure_ascii=True)
     init_workspace_db()
     with _connect() as conn:

@@ -76,6 +76,7 @@ export type WorkspaceThread = {
 };
 
 export type WorkspaceStatePayload = {
+  projects?: string[];
   threads: WorkspaceThread[];
 };
 

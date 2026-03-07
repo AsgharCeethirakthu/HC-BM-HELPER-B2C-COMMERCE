@@ -241,6 +241,46 @@ body {
   background: rgba(15, 23, 42, 0.035);
 }
 
+.history-folder-add-btn {
+  @apply inline-flex h-8 w-8 items-center justify-center rounded-full border border-obsidian/15 bg-white text-obsidian/70 transition-all duration-150;
+  box-shadow: 0 4px 10px rgba(15, 23, 42, 0.06);
+  position: relative;
+}
+
+.history-folder-add-btn:hover {
+  transform: translateY(-1px);
+  color: rgba(37, 99, 235, 0.95);
+  border-color: rgba(37, 99, 235, 0.28);
+}
+
+.history-folder-add-btn.active {
+  @apply border-signal/30 bg-signal/10 text-signal;
+}
+
+.history-folder-add-btn::after {
+  content: attr(data-tooltip);
+  position: absolute;
+  right: 0;
+  top: calc(100% + 6px);
+  background: rgba(15, 23, 42, 0.9);
+  color: white;
+  border-radius: 0.4rem;
+  padding: 0.22rem 0.42rem;
+  font-size: 0.62rem;
+  font-weight: 600;
+  white-space: nowrap;
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(-2px);
+  transition: opacity 120ms ease, transform 120ms ease;
+  z-index: 20;
+}
+
+.history-folder-add-btn:hover::after {
+  opacity: 1;
+  transform: translateY(0);
+}
+
 .history-search-input {
   @apply w-full rounded-xl border border-obsidian/15 bg-white px-3 py-2 text-xs text-obsidian/75 focus:outline-none focus:ring-2 focus:ring-signal/30;
 }
@@ -259,12 +299,27 @@ body {
   gap: 0.35rem;
 }
 
+.history-project-group-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.45rem;
+}
+
+.history-project-add-btn {
+  @apply inline-flex rounded-full border border-signal/25 bg-white px-2 py-0.5 text-[0.62rem] font-semibold text-signal transition-colors;
+}
+
+.history-project-add-btn:hover {
+  @apply bg-signal/10 border-signal/30;
+}
+
 .history-project-filter-chip {
   @apply rounded-full border border-obsidian/15 bg-white px-2.5 py-1 text-[0.62rem] font-semibold text-obsidian/65 transition-colors;
 }
 
 .history-project-filter-chip.active {
-  @apply border-signal/35 bg-signal/10 text-signal;
+  @apply border-signal/30 bg-signal/10 text-signal;
 }
 
 .history-list {

@@ -206,4 +206,5 @@ class WorkspaceThread(BaseModel):
 
 
 class WorkspaceStatePayload(BaseModel):
+    projects: list[str] = Field(default_factory=list)
     threads: list[WorkspaceThread] = Field(default_factory=list)

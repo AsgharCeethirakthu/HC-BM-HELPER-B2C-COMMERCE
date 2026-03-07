@@ -517,6 +517,7 @@ const createThread = (seed?: string, projectTag?: string | null): ChatThread => 
 export default function AnalyzerApp() {
   const [threads, setThreads] = useState<ChatThread[]>([createThread()]);
   const [activeThreadId, setActiveThreadId] = useState<string>(threads[0].id);
+  const [projects, setProjects] = useState<string[]>([]);
   const [composer, setComposer] = useState("");
   const [attachments, setAttachments] = useState<AttachmentMeta[]>([]);
   const [loading, setLoading] = useState(false);
@@ -566,6 +567,8 @@ export default function AnalyzerApp() {
   } | null>(null);
   const [threadSearch, setThreadSearch] = useState("");
   const [projectFilter, setProjectFilter] = useState<string>("All");
+  const [isAddProjectOpen, setIsAddProjectOpen] = useState(false);
+  const [newProjectDraft, setNewProjectDraft] = useState("");
   const [newThreadTitleDraft, setNewThreadTitleDraft] = useState("");
   const [newThreadProjectDraft, setNewThreadProjectDraft] = useState("");
   const [expandedAnalysisKeys, setExpandedAnalysisKeys] = useState<Set<string>>(new Set());
@@ -694,6 +697,11 @@ export default function AnalyzerApp() {
 
   const groupedThreads = useMemo(() => {
     const groups = new Map<string, ChatThread[]>();
+    for (const project of knownProjects) {
+      if (project !== "No Project") {
+        groups.set(project, []);
+      }
+    }
     for (const thread of projectFilteredThreads) {
       const key = getPrimaryThreadProject(thread);
       const items = groups.get(key) || [];
@@ -705,10 +713,13 @@ export default function AnalyzerApp() {
       if (b[0] === "No Project") return -1;
       return a[0].localeCompare(b[0]);
     });
-  }, [projectFilteredThreads]);
+  }, [projectFilteredThreads, knownProjects]);
 
   const knownProjects = useMemo(() => {
     const set = new Set<string>();
+    for (const project of projects) {
+      if (project.trim()) set.add(project.trim());
+    }
     for (const thread of threads) {
       for (const project of getProjectsFromThread(thread)) {
         if (project.trim()) set.add(project.trim());
@@ -718,7 +729,7 @@ export default function AnalyzerApp() {
       set.add("No Project");
     }
     return Array.from(set).sort((a, b) => a.localeCompare(b));
-  }, [threads]);
+  }, [threads, projects]);
 
   const closeOverlays = () => {
     setIsMobileHistoryOpen(false);
@@ -753,6 +764,11 @@ export default function AnalyzerApp() {
       try {
         const payload = await fetchWorkspaceState(sessionEmail);
         if (cancelled) return;
+        const loadedProjects = Array.isArray(payload.projects)
+          ? payload.projects
+              .map((project) => (typeof project === "string" ? project.trim() : ""))
+              .filter(Boolean)
+          : [];
         const loadedThreads: ChatThread[] = (payload.threads || [])
           .map((thread) => {
             const now = thread.updated_at || new Date().toISOString();
@@ -781,6 +797,7 @@ export default function AnalyzerApp() {
           })
           .filter((thread) => !!thread.id);
 
+        setProjects(loadedProjects);
         if (loadedThreads.length > 0) {
           setThreads(loadedThreads);
           setActiveThreadId(loadedThreads[0].id);
@@ -805,6 +822,7 @@ export default function AnalyzerApp() {
     }
     workspaceSyncTimerRef.current = window.setTimeout(() => {
       void saveWorkspaceState({
+        projects,
         threads: threads.map((thread) => ({
           id: thread.id,
           title: thread.title,
@@ -822,7 +840,7 @@ export default function AnalyzerApp() {
         window.clearTimeout(workspaceSyncTimerRef.current);
       }
     };
-  }, [threads, workspaceLoaded, sessionEmail]);
+  }, [projects, threads, workspaceLoaded, sessionEmail]);
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -993,11 +1011,48 @@ export default function AnalyzerApp() {
         ? projectFilter
         : activeThread?.projectTag || null;
     const thread = createThread(cleanedTitle || undefined, cleanedProject || fallbackProject);
+    if (thread.projectTag?.trim()) {
+      setProjects((prev) => {
+        const exists = prev.some((project) => project.toLowerCase() === thread.projectTag!.toLowerCase());
+        if (exists) return prev;
+        return [...prev, thread.projectTag!];
+      });
+    }
     setThreads((prev) => [thread, ...prev]);
     setActiveThreadId(thread.id);
     setIntroAnimationThreadId(thread.id);
     setNewThreadTitleDraft("");
     setNewThreadProjectDraft("");
+    setComposer("");
+    setAttachments([]);
+    setError("");
+    setGuidedCustomDraft("");
+    setSelectedGuidedOption("");
+    closeOverlays();
+    window.setTimeout(() => {
+      setIntroAnimationThreadId((current) => (current === thread.id ? null : current));
+    }, 950);
+  };
+
+  const addProject = () => {
+    const cleaned = newProjectDraft.trim();
+    if (!cleaned) return;
+    setProjects((prev) => {
+      const exists = prev.some((project) => project.toLowerCase() === cleaned.toLowerCase());
+      if (exists) return prev;
+      return [...prev, cleaned];
+    });
+    setNewThreadProjectDraft(cleaned);
+    setNewProjectDraft("");
+    setIsAddProjectOpen(false);
+  };
+
+  const startThreadInProject = (projectName: string) => {
+    const projectTag = projectName === "No Project" ? null : projectName;
+    const thread = createThread(undefined, projectTag);
+    setThreads((prev) => [thread, ...prev]);
+    setActiveThreadId(thread.id);
+    setIntroAnimationThreadId(thread.id);
     setComposer("");
     setAttachments([]);
     setError("");
@@ -1021,6 +1076,13 @@ export default function AnalyzerApp() {
     const cleaned = renameDraft.trim();
     if (!cleaned) return;
     const cleanedProject = renameProjectDraft.trim();
+    if (cleanedProject) {
+      setProjects((prev) => {
+        const exists = prev.some((project) => project.toLowerCase() === cleanedProject.toLowerCase());
+        if (exists) return prev;
+        return [...prev, cleanedProject];
+      });
+    }
     setThreads((prev) =>
       prev.map((thread) =>
         thread.id === threadId
@@ -1979,10 +2041,17 @@ export default function AnalyzerApp() {
                   </span>
                 </h2>
                 <button
-                  className="rounded-full border border-obsidian/15 bg-white px-2.5 py-1 text-[0.68rem] font-semibold text-obsidian/70"
-                  onClick={startNewThread}
+                  className={`history-folder-add-btn ${isAddProjectOpen ? "active" : ""}`}
+                  onClick={() => setIsAddProjectOpen((prev) => !prev)}
+                  data-tooltip={isAddProjectOpen ? "Close project panel" : "Add Project"}
+                  aria-label={isAddProjectOpen ? "Close project panel" : "Add Project"}
+                  type="button"
                 >
-                  + New
+                  <svg viewBox="0 0 24 24" aria-hidden="true" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="1.9">
+                    <path d="M3.5 7.5h6l1.7 2h8.8v7.8a2 2 0 0 1-2 2H5.5a2 2 0 0 1-2-2V7.5Z" />
+                    <path d="M12 12v5" />
+                    <path d="M9.5 14.5h5" />
+                  </svg>
                 </button>
               </div>
               <button
@@ -2002,6 +2071,26 @@ export default function AnalyzerApp() {
                 placeholder="Search thread or project..."
                 aria-label="Search threads by project or title"
               />
+              {isAddProjectOpen && (
+                <div className="history-create-row">
+                  <input
+                    value={newProjectDraft}
+                    onChange={(event) => setNewProjectDraft(event.target.value)}
+                    className="history-search-input"
+                    placeholder="Project name (e.g. SFCC)"
+                    aria-label="New project name"
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter") {
+                        event.preventDefault();
+                        addProject();
+                      }
+                    }}
+                  />
+                  <button className="history-project-filter-chip active" onClick={addProject} type="button">
+                    Add Project
+                  </button>
+                </div>
+              )}
               <div className="history-create-row">
                 <input
                   value={newThreadProjectDraft}
@@ -2045,9 +2134,19 @@ export default function AnalyzerApp() {
             <div role="listbox" aria-label="Previous chats" className="history-list">
               {groupedThreads.map(([projectGroup, groupThreads]) => (
                 <div key={`group-${projectGroup}`} className="grid gap-2">
-                  <p className="px-1 text-[0.62rem] font-semibold uppercase tracking-[0.14em] text-obsidian/45">
-                    {projectGroup}
-                  </p>
+                  <div className="history-project-group-head">
+                    <p className="px-1 text-[0.62rem] font-semibold uppercase tracking-[0.14em] text-obsidian/45">
+                      {projectGroup}
+                    </p>
+                    <button
+                      className="history-project-add-btn"
+                      type="button"
+                      onClick={() => startThreadInProject(projectGroup)}
+                      aria-label={`Add thread in ${projectGroup}`}
+                    >
+                      + Thread
+                    </button>
+                  </div>
                   {groupThreads.map((thread) => {
                     const threadProjects = getProjectsFromThread(thread);
                     return (
