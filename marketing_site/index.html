@@ -3,331 +3,127 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Requirement Analyzer AI Agent</title>
-    <meta name="description" content="Requirement Analyzer AI Agent turns scattered requirements into clear gaps, traceability, and FSD-ready outputs." />
+    <title>SCOUT Requirement Intelligence</title>
+    <meta name="description" content="SCOUT Requirement Intelligence | AI workspace for delivery teams." />
     <link rel="stylesheet" href="styles.css" />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Fraunces:opsz,wght@9..144,600;9..144,700&display=swap" rel="stylesheet" />
+    <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
   </head>
   <body>
-    <div class="noise"></div>
-    <div class="orb orb-1"></div>
-    <div class="orb orb-2"></div>
-
-    <header class="nav">
-      <div class="logo">
-        <img src="assets/scout-logo.png" alt="SCOUT logo" class="logo-mark" />
+    <header class="nav-wrap">
+      <div class="nav">
+        <img src="assets/scout-logo.png" alt="SCOUT" class="logo" />
+        <nav>
+          <a href="#why">Why Scout</a>
+          <a href="#product">Product</a>
+          <a href="#workflow">Workflow</a>
+          <a href="#contact">Contact</a>
+        </nav>
+        <a class="btn btn-dark" href="https://hc-bm-helper-b2-c-commerce.vercel.app/gate">Sign In</a>
       </div>
-      <nav class="nav-links">
-        <a href="#capabilities">Capabilities</a>
-        <a href="#workflow">Workflow</a>
-        <a href="#realworld">Scenarios</a>
-        <a href="#features">Features</a>
-        <a href="#contact">Enquire</a>
-      </nav>
-      <button class="nav-cta">Request Access</button>
     </header>
 
-    <main>
-      <section class="hero">
-        <div class="hero-copy">
-          <p class="eyebrow">Scout by OSF Digital</p>
-          <h1>Turn messy requirements into confident delivery decisions.</h1>
-          <p class="lead">
-            The Requirement Analyzer AI Agent ingests Confluence, baselines, and SFCC documentation to
-            deliver gap analysis, traceability, and FSD-ready outputs in one flow.
-          </p>
+    <main class="page">
+      <section class="panel hero" id="top">
+        <div class="hero-left">
+          <p class="kicker">Scout by OSF Digital</p>
+          <h1>AI workspace for requirement clarity and faster delivery.</h1>
+          <p class="hero-copy">Convert scattered inputs into clear coverage, defensible evidence, and FSD-ready outputs your team can trust.</p>
           <div class="hero-actions">
-            <button class="primary">Book a Demo</button>
-            <button class="ghost">View Sample Output</button>
+            <a class="btn btn-dark" href="https://hc-bm-helper-b2-c-commerce.vercel.app/gate">Book Demo</a>
+            <a class="btn btn-soft" href="https://hc-bm-helper-b2-c-commerce.vercel.app/gate">View Output</a>
           </div>
           <div class="hero-stats">
-            <div>
-              <span class="stat">10x</span>
-              <span class="label">Faster discovery</span>
-            </div>
-            <div>
-              <span class="stat">40%</span>
-              <span class="label">Less rework</span>
-            </div>
-            <div>
-              <span class="stat">Minutes</span>
-              <span class="label">to first draft</span>
-            </div>
-          </div>
-          <div class="hero-meta">
-            <span>Built for BAs, Architects, and Delivery Leads</span>
-            <span>Designed for SFRA + B2C Commerce</span>
+            <div><strong>10x</strong><span>Faster discovery</span></div>
+            <div><strong>40%</strong><span>Less rework</span></div>
           </div>
         </div>
-        <div class="hero-panel">
-          <div class="panel-header">
-            <span>Requirement Gap Snapshot</span>
-            <span class="chip">Live analysis</span>
-          </div>
-          <div class="panel-body">
-            <div class="panel-row">
-              <span>Order routing rules by region</span>
-              <span class="status risk">Gap</span>
-            </div>
-            <div class="panel-row">
-              <span>Loyalty redemption in checkout</span>
-              <span class="status partial">Partial</span>
-            </div>
-            <div class="panel-row">
-              <span>Payment tokenization</span>
-              <span class="status ok">Covered</span>
-            </div>
-            <div class="panel-divider"></div>
-            <div class="panel-callout">
-              <p>Top evidence sources</p>
-              <ul>
-                <li>SFRA Checkout Extension Guide</li>
-                <li>OCAPI Payment Instruments</li>
-                <li>Confluence: Loyalty MVP v2</li>
-              </ul>
-            </div>
-          </div>
-        </div>
-      </section>
-
-      <section class="showcase" id="showcase">
-        <div class="section-title">
-          <p class="eyebrow">Product Glimpse</p>
-          <h2>See the app experience your team will use every day.</h2>
-        </div>
-        <div class="showcase-grid">
-          <article class="shot-card">
-            <img src="assets/screenshot-chat.svg" alt="Scout chat workspace view" />
-            <div>
-              <h3>Guided requirement discussion</h3>
-              <p>Structured follow-ups keep conversations on scope and implementation decisions.</p>
-            </div>
-          </article>
-          <article class="shot-card">
-            <img src="assets/screenshot-gap.svg" alt="Scout gap analysis matrix view" />
-            <div>
-              <h3>Gap analysis with evidence</h3>
-              <p>Classifications, confidence, and source grounding in one shared screen.</p>
-            </div>
-          </article>
-          <article class="shot-card">
-            <img src="assets/screenshot-fsd.svg" alt="Scout FSD preview and export view" />
-            <div>
-              <h3>FSD preview and export</h3>
-              <p>Move from analysis to shareable documentation without copy-paste loops.</p>
-            </div>
+        <div class="hero-right">
+          <img src="assets/mascot-hero.png" alt="Scout mascot" class="hero-mascot" />
+          <article class="hero-preview">
+            <img src="assets/screenshot-gap.svg" alt="SCOUT gap analysis preview" />
           </article>
         </div>
       </section>
 
-      <section class="product">
-        <div class="section-title">
-          <p class="eyebrow">What It Delivers</p>
-          <h2>A BA-friendly workspace for scope, traceability, and delivery readiness.</h2>
-        </div>
-        <div class="product-grid">
-          <div class="product-card">
-            <h3>Traceability matrix</h3>
-            <p>Each requirement is tied to evidence, confidence scores, and source freshness.</p>
-            <div class="mini-table">
-              <div class="mini-row head">
-                <span>Requirement</span>
-                <span>Coverage</span>
-                <span>Risk</span>
-              </div>
-              <div class="mini-row">
-                <span>Guest checkout</span>
-                <span class="badge ok">Covered</span>
-                <span class="badge low">Low</span>
-              </div>
-              <div class="mini-row">
-                <span>Loyalty earn rules</span>
-                <span class="badge partial">Partial</span>
-                <span class="badge med">Med</span>
-              </div>
-              <div class="mini-row">
-                <span>Tax calculation</span>
-                <span class="badge gap">Gap</span>
-                <span class="badge high">High</span>
-              </div>
+      <section class="panel" id="why">
+        <p class="kicker">Why Scout</p>
+        <h2>Only what teams actually need.</h2>
+        <div class="cards-3">
+          <article class="info-card">
+            <div class="info-head">
+              <img src="assets/mascot-orbit.png" alt="Scout mascot" class="info-mascot" />
+              <h3>Analyze coverage</h3>
             </div>
-          </div>
-          <div class="product-card">
-            <h3>Baseline comparison</h3>
-            <p>Lock a baseline and compare every new scope change in one view.</p>
-            <div class="delta-grid">
-              <div>
-                <span class="stat">12</span>
-                <span class="label">Added</span>
-              </div>
-              <div>
-                <span class="stat">7</span>
-                <span class="label">Changed</span>
-              </div>
-              <div>
-                <span class="stat">4</span>
-                <span class="label">Removed</span>
-              </div>
+            <p>Instantly identify covered, partial, and missing requirements.</p>
+          </article>
+          <article class="info-card">
+            <div class="info-head">
+              <img src="assets/mascot-core.png" alt="Scout mascot" class="info-mascot" />
+              <h3>Map evidence</h3>
             </div>
-          </div>
-          <div class="product-card">
-            <h3>FSD-ready outputs</h3>
-            <p>Generate export-ready sections for business and technical teams in minutes.</p>
-            <div class="doc-snippet">
-              <p class="doc-title">Functional Solution Design</p>
-              <p class="doc-line">1. Scope Overview</p>
-              <p class="doc-line">2. Checkout and Payments</p>
-              <p class="doc-line">3. Data and Integrations</p>
-              <p class="doc-line">4. Risks and Open Items</p>
+            <p>Every output is grounded with source snippets for confidence.</p>
+          </article>
+          <article class="info-card">
+            <div class="info-head">
+              <img src="assets/mascot-login.png" alt="Scout mascot" class="info-mascot" />
+              <h3>Generate output</h3>
             </div>
-          </div>
-        </div>
-      </section>
-
-      <section id="capabilities" class="capabilities">
-        <div class="section-title">
-          <p class="eyebrow">Capabilities</p>
-          <h2>Built for commerce teams that cannot afford guesswork.</h2>
-        </div>
-        <div class="cards">
-          <article class="card">
-            <h3>Requirement parsing</h3>
-            <p>Upload docs or paste raw text. The agent clusters, de-dupes, and extracts actionable requirements.</p>
-          </article>
-          <article class="card">
-            <h3>Traceable evidence</h3>
-            <p>Every response is grounded with source snippets and metadata you can audit.</p>
-          </article>
-          <article class="card">
-            <h3>Baseline comparisons</h3>
-            <p>Lock a baseline, re-run new scopes, and instantly see what changed.</p>
-          </article>
-          <article class="card">
-            <h3>FSD drafting</h3>
-            <p>Generate an FSD-ready outline and export docx with structured sections.</p>
+            <p>Create FSD-ready drafts and exports in minutes.</p>
           </article>
         </div>
       </section>
 
-      <section id="workflow" class="workflow">
-        <div class="section-title">
-          <p class="eyebrow">Workflow</p>
-          <h2>From intake to delivery, without the bottlenecks.</h2>
-        </div>
-        <div class="steps">
-          <div class="step">
-            <span class="step-number">01</span>
-            <h3>Ingest</h3>
-            <p>Connect Confluence, SFCC docs, and baseline assets.</p>
-          </div>
-          <div class="step">
-            <span class="step-number">02</span>
-            <h3>Analyze</h3>
-            <p>Gap analysis across functional, data, and integration needs.</p>
-          </div>
-          <div class="step">
-            <span class="step-number">03</span>
-            <h3>Deliver</h3>
-            <p>Export findings and FSD drafts for business and technical teams.</p>
-          </div>
-        </div>
-      </section>
-
-      <section id="realworld" class="realworld">
-        <div class="section-title">
-          <p class="eyebrow">Real-World Scenarios</p>
-          <h2>Designed around the moments BAs and delivery leads struggle with.</h2>
-        </div>
-        <div class="scenario-grid">
-          <div class="scenario-card">
-            <h3>RFP response crunch</h3>
-            <p>Pull source evidence and provide a structured gap list in hours, not days.</p>
-            <ul>
-              <li>Auto-generated requirements list</li>
-              <li>Coverage confidence scores</li>
-              <li>Exportable executive summary</li>
-            </ul>
-          </div>
-          <div class="scenario-card">
-            <h3>Mid-project scope shift</h3>
-            <p>Compare baseline vs. new scope and highlight risk deltas instantly.</p>
-            <ul>
-              <li>Added and removed diff view</li>
-              <li>Risk register updates</li>
-              <li>Stakeholder-ready change brief</li>
-            </ul>
-          </div>
-          <div class="scenario-card">
-            <h3>UAT readiness</h3>
-            <p>Generate test ideas, acceptance criteria, and missing NFRs.</p>
-            <ul>
-              <li>Test case suggestions</li>
-              <li>Performance and security checks</li>
-              <li>Traceability matrix</li>
-            </ul>
-          </div>
-        </div>
-      </section>
-
-      <section id="features" class="features">
-        <div class="section-title">
-          <p class="eyebrow">Feature Highlights</p>
-          <h2>More than a demo. Built for real delivery teams.</h2>
-        </div>
-        <div class="feature-grid">
-          <div class="feature">
-            <h3>Requirement quality scoring</h3>
-            <p>Flag ambiguity, missing acceptance criteria, and non-testable statements.</p>
-          </div>
-          <div class="feature">
-            <h3>Impact analysis</h3>
-            <p>Show which epics, systems, and APIs are affected by each change.</p>
-          </div>
-          <div class="feature">
-            <h3>Risk register</h3>
-            <p>Auto-generate risks with severity, mitigation, and owners.</p>
-          </div>
-          <div class="feature">
-            <h3>Stakeholder exports</h3>
-            <p>Generate executive summaries, docx, and JSON for approvals.</p>
-          </div>
-        </div>
-      </section>
-
-      <section id="contact" class="contact">
-        <div class="contact-card">
+      <section class="panel panel-blue" id="product">
+        <div class="section-head">
           <div>
-            <p class="eyebrow">Enquire</p>
-            <h2>Tell us about your project.</h2>
-            <p class="lead">We will respond with a tailored pilot plan and a demo environment.</p>
+            <p class="kicker kicker-light">Product</p>
+            <h2>Clean interface. Practical outcomes.</h2>
           </div>
-          <form class="contact-form">
-            <label>
-              Full name
-              <input type="text" placeholder="Jane Doe" />
-            </label>
-            <label>
-              Work email
-              <input type="email" placeholder="jane@company.com" />
-            </label>
-            <label>
-              Project summary
-              <textarea rows="4" placeholder="What do you want to analyze?"></textarea>
-            </label>
-            <button class="primary" type="button">Submit Enquiry</button>
-            <p class="form-note">No spam. We only use this to schedule a discovery call.</p>
-          </form>
+          <img src="assets/mascot-hero.png" alt="Scout mascot" class="tiny-mascot big" />
+        </div>
+        <div class="cards-2">
+          <article class="shot-card">
+            <img src="assets/screenshot-chat.svg" alt="Guided requirement discussion" />
+            <h3>Guided requirement discussion</h3>
+          </article>
+          <article class="shot-card">
+            <img src="assets/screenshot-fsd.svg" alt="FSD preview and export" />
+            <h3>FSD preview and export</h3>
+          </article>
         </div>
       </section>
-    </main>
 
-    <footer class="footer">
-      <div class="footer-brand">
-        <img src="assets/scout-logo.png" alt="SCOUT logo" class="footer-logo" />
-      </div>
-      <p>Built for teams shipping smarter B2C Commerce solutions.</p>
-    </footer>
+      <section class="panel panel-dark" id="workflow">
+        <p class="kicker kicker-light">Workflow</p>
+        <h2>Ingest. Analyze. Deliver.</h2>
+        <div class="cards-3 steps">
+          <article class="step-card"><span>01</span><h3>Ingest</h3><p>Bring docs and scope context.</p></article>
+          <article class="step-card"><span>02</span><h3>Analyze</h3><p>Run evidence-backed gap analysis.</p></article>
+          <article class="step-card"><span>03</span><h3>Deliver</h3><p>Share concise outputs with stakeholders.</p></article>
+        </div>
+      </section>
+
+      <section class="panel contact" id="contact">
+        <div class="contact-left">
+          <p class="kicker">Enquire</p>
+          <h2>Tell us about your project.</h2>
+          <p>We will respond with a tailored pilot plan.</p>
+          <img src="assets/mascot-contact.png" alt="Scout mascot" class="contact-mascot" />
+        </div>
+        <form class="contact-form">
+          <label>Full name<input type="text" placeholder="Jane Doe" /></label>
+          <label>Work email<input type="email" placeholder="jane@company.com" /></label>
+          <label>Project summary<textarea rows="4" placeholder="What do you want to analyze?"></textarea></label>
+          <button class="btn btn-dark" type="button">Submit Enquiry</button>
+        </form>
+      </section>
+
+      <footer class="footer">
+        <img src="assets/scout-logo.png" alt="SCOUT" class="logo" />
+        <p>Built for teams shipping smarter B2C Commerce solutions.</p>
+      </footer>
+    </main>
   </body>
 </html>
