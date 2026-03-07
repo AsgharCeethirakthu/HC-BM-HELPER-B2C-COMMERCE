@@ -2061,7 +2061,7 @@ export default function AnalyzerApp() {
                       className="history-thread-link"
                       onClick={() => setIsFsdPreviewEditing((prev) => !prev)}
                     >
-                      {isFsdPreviewEditing ? "View mode" : "Edit mode"}
+                      {isFsdPreviewEditing ? "Preview" : "Edit"}
                     </button>
                   </div>
                   {isFsdPreviewEditing ? (
@@ -2087,14 +2087,14 @@ export default function AnalyzerApp() {
                 <button
                   onClick={() => void handleExportDocx()}
                   disabled={loading || !fsdPreviewDraft.trim()}
-                  className="rounded-full bg-mint px-5 py-2.5 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-60"
+                  className="rounded-full bg-mint px-4 py-2 text-[0.84rem] font-semibold text-white disabled:cursor-not-allowed disabled:opacity-60"
                 >
                   {loading ? "Preparing..." : "Export FSD (.docx)"}
                 </button>
                 <button
                   onClick={() => void openConfluenceModal()}
                   disabled={loading || !fsdPreviewDraft.trim()}
-                  className="rounded-full bg-signal px-5 py-2.5 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-60"
+                  className="rounded-full bg-signal px-4 py-2 text-[0.84rem] font-semibold text-white disabled:cursor-not-allowed disabled:opacity-60"
                 >
                   Save to Confluence
                 </button>
@@ -2865,7 +2865,7 @@ export default function AnalyzerApp() {
             <button
               onClick={() => void handleOpenFsdPreview()}
               disabled={fsdPreviewLoading || !latestAnalysisResults.length}
-              className="inline-flex w-full items-center justify-center gap-2 rounded-full bg-steel px-4 py-3 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-60"
+              className="inline-flex w-full items-center justify-center gap-2 rounded-full bg-steel px-4 py-2.5 text-[0.84rem] font-semibold text-white disabled:cursor-not-allowed disabled:opacity-60"
             >
               {fsdPreviewLoading ? (
                 <>
@@ -2874,7 +2874,7 @@ export default function AnalyzerApp() {
                 </>
               ) : (
                 <>
-                  <svg viewBox="0 0 24 24" aria-hidden="true" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2">
+                  <svg viewBox="0 0 24 24" aria-hidden="true" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="2">
                     <path d="M15 18l-6-6 6-6" />
                   </svg>
                   <span>Preview FSD</span>
@@ -2886,13 +2886,13 @@ export default function AnalyzerApp() {
                 <button
                   onClick={() => void handleExportDocx()}
                   disabled={loading || !fsdPreviewDraft.trim()}
-                  className="mt-2 inline-flex w-full items-center justify-center gap-2 rounded-full bg-mint px-4 py-3 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-60"
+                  className="mt-2 inline-flex w-full items-center justify-center gap-2 rounded-full bg-mint px-4 py-2.5 text-[0.84rem] font-semibold text-white disabled:cursor-not-allowed disabled:opacity-60"
                 >
                   {loading ? (
                     "Preparing..."
                   ) : (
                     <>
-                      <svg viewBox="0 0 24 24" aria-hidden="true" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2">
+                      <svg viewBox="0 0 24 24" aria-hidden="true" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="2">
                         <path d="M12 4v10" />
                         <path d="M8 10l4 4 4-4" />
                         <path d="M4 20h16" />
@@ -2904,9 +2904,9 @@ export default function AnalyzerApp() {
                 <button
                   onClick={() => void openConfluenceModal()}
                   disabled={loading || !fsdPreviewDraft.trim()}
-                  className="mt-2 inline-flex w-full items-center justify-center gap-2 rounded-full bg-signal px-4 py-3 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-60"
+                  className="mt-2 inline-flex w-full items-center justify-center gap-2 rounded-full bg-signal px-4 py-2.5 text-[0.84rem] font-semibold text-white disabled:cursor-not-allowed disabled:opacity-60"
                 >
-                  <svg viewBox="0 0 24 24" aria-hidden="true" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2">
+                  <svg viewBox="0 0 24 24" aria-hidden="true" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="2">
                     <path d="M8 6h8l4 4v8H8V6Z" />
                     <path d="M16 6v4h4" />
                     <path d="M4 10h4v10h12" />
