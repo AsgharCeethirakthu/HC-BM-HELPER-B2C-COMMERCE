@@ -1,0 +1,17 @@
+<svg width="340" height="84" viewBox="0 0 340 84" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="g1" x1="10" y1="10" x2="74" y2="74" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#2563EB"/>
+      <stop offset="1" stop-color="#14B8A6"/>
+    </linearGradient>
+  </defs>
+  <rect x="2" y="2" width="80" height="80" rx="22" fill="#FFFFFF"/>
+  <rect x="2" y="2" width="80" height="80" rx="22" stroke="#D9E3FA" stroke-width="2"/>
+  <circle cx="42" cy="42" r="23" fill="url(#g1)" opacity="0.16"/>
+  <path d="M25 52C35 58 49 58 59 52" stroke="url(#g1)" stroke-width="5" stroke-linecap="round"/>
+  <path d="M31 36C34.5 30.5 39 27.5 44 27.5C49 27.5 53.5 30.5 57 36" stroke="#1F2A44" stroke-width="5" stroke-linecap="round"/>
+  <circle cx="33" cy="41" r="3.5" fill="#1F2A44"/>
+  <circle cx="55" cy="41" r="3.5" fill="#1F2A44"/>
+  <text x="96" y="38" fill="#0B1220" font-size="28" font-family="Plus Jakarta Sans, Manrope, sans-serif" font-weight="700">Scout</text>
+  <text x="96" y="62" fill="#425065" font-size="16" font-family="Manrope, sans-serif" font-weight="600">Requirement Analyzer</text>
+</svg>
