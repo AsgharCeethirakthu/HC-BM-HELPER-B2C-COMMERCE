@@ -91,7 +91,7 @@ body {
 }
 
 .logo-mark {
-  height: 42px;
+  height: 34px;
   width: auto;
   display: block;
 }
@@ -602,7 +602,7 @@ main {
 }
 
 .footer-logo {
-  height: 36px;
+  height: 30px;
   width: auto;
 }
 
@@ -624,10 +624,10 @@ main {
   }
 
   .logo-mark {
-    height: 34px;
+    height: 28px;
   }
 
   .footer-logo {
-    height: 30px;
+    height: 24px;
   }
 }
