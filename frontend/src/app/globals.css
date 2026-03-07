@@ -786,10 +786,11 @@ body {
 
 .chat-empty-left {
   display: flex;
-  align-items: center;
+  align-items: end;
   justify-content: center;
   flex: 0 0 clamp(230px, 38%, 360px);
   height: 100%;
+  padding: 15px;
 }
 
 .chat-empty-mascot {
@@ -923,12 +924,13 @@ body {
 }
 
 .guided-next-btn {
-  @apply rounded-full border border-obsidian/15 bg-white px-3 py-1.5 text-xs font-semibold text-obsidian/75 transition-colors hover:text-obsidian disabled:cursor-not-allowed;
+  @apply rounded-full bg-signal px-3.5 py-1.5 text-xs font-semibold text-white transition-opacity disabled:cursor-not-allowed;
   min-width: 6.1rem;
   min-height: 2rem;
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  gap: 0.35rem;
   line-height: 1;
 }
 
@@ -948,13 +950,28 @@ body {
   width: 0.72rem;
   height: 0.72rem;
   border-radius: 9999px;
-  border: 2px solid rgba(71, 85, 105, 0.25);
-  border-top-color: rgba(37, 99, 235, 0.9);
+  border: 2px solid rgba(255, 255, 255, 0.4);
+  border-top-color: rgba(255, 255, 255, 0.95);
   animation: guided-next-spin 700ms linear infinite;
 }
 
 .guided-analyze-btn {
-  @apply rounded-full bg-signal px-3.5 py-1.5 text-xs font-semibold text-white disabled:cursor-not-allowed;
+  @apply rounded-full border border-obsidian/15 bg-white px-3 py-1.5 text-xs font-semibold text-obsidian/75 transition-colors hover:text-obsidian disabled:cursor-not-allowed;
+  min-height: 2rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.35rem;
+}
+
+.guided-analyze-btn-primary {
+  @apply bg-signal border-transparent px-3.5 text-white hover:text-white;
+}
+
+.guided-btn-icon {
+  width: 0.78rem;
+  height: 0.78rem;
+  flex: 0 0 auto;
 }
 
 .guided-cancel-note {

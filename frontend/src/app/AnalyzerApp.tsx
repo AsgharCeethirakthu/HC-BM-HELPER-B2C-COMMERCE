@@ -2951,6 +2951,22 @@ export default function AnalyzerApp() {
                         {activeGuidedCycle.status === "guided" && isFinalGuidedStep && !isGuidedStepLoading && (
                           <p className="guided-final-note">Click Analyze now to generate the final response.</p>
                         )}
+                        {!isNextThinking && (
+                          <button
+                            className={`guided-analyze-btn ${isFinalGuidedStep ? "guided-analyze-btn-primary" : ""}`}
+                            onClick={() => void handleAnalyzeNow()}
+                            disabled={loading || guidedLoading || !activeGuidedCycle.baseRequirement}
+                          >
+                            <svg viewBox="0 0 24 24" aria-hidden="true" className="guided-btn-icon" fill="none" stroke="currentColor" strokeWidth="2">
+                              <path d="M14 5h5v5" />
+                              <path d="M10 14L19 5" />
+                              <path d="M19 14v5h-5" />
+                              <path d="M5 10V5h5" />
+                              <path d="M5 19l9-9" />
+                            </svg>
+                            <span>Analyze now</span>
+                          </button>
+                        )}
                         {activeGuidedCycle.status === "guided" && !isFinalGuidedStep && !isGuidedStepLoading && (
                           <button
                             className={`guided-next-btn ${isNextThinking ? "guided-next-thinking-shift" : ""}`}
@@ -2963,17 +2979,21 @@ export default function AnalyzerApp() {
                                 <span>Thinking</span>
                               </span>
                             ) : (
-                              "Next"
+                              <>
+                                <span>Next</span>
+                                <svg
+                                  viewBox="0 0 24 24"
+                                  aria-hidden="true"
+                                  className="guided-btn-icon"
+                                  fill="none"
+                                  stroke="currentColor"
+                                  strokeWidth="2"
+                                >
+                                  <path d="M5 12h14" />
+                                  <path d="m13 5 7 7-7 7" />
+                                </svg>
+                              </>
                             )}
-                          </button>
-                        )}
-                        {!isNextThinking && (
-                          <button
-                            className="guided-analyze-btn"
-                            onClick={() => void handleAnalyzeNow()}
-                            disabled={loading || guidedLoading || !activeGuidedCycle.baseRequirement}
-                          >
-                            Analyze now
                           </button>
                         )}
                       </div>
