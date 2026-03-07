@@ -788,14 +788,14 @@ body {
   display: flex;
   align-items: center;
   justify-content: center;
-  flex: 0 0 clamp(220px, 36%, 340px);
+  flex: 0 0 clamp(230px, 38%, 360px);
   height: 100%;
 }
 
 .chat-empty-mascot {
   width: 100%;
   height: auto;
-  max-height: 320px;
+  max-height: 336px;
   max-width: 100%;
   object-fit: contain;
   object-position: center bottom;
