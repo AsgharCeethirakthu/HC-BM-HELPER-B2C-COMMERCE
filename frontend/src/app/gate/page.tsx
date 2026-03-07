@@ -54,10 +54,7 @@ export default function GatePage() {
               <p className="text-2xl font-semibold sm:text-3xl">Access Gate</p>
             </div>
           </div>
-          <p className="mt-4 max-w-[56ch] text-sm leading-6 text-obsidian/72">
-            Sign in with your <span className="font-semibold text-obsidian">@osf.digital</span> email to access
-            SCOUT Requirement Intelligence.
-          </p>
+          <p className="mt-4 max-w-[56ch] text-sm leading-6 text-obsidian/72">Add your OSF email.</p>
           <div className="mt-6 grid gap-3">
             <label className="text-xs font-semibold uppercase tracking-[0.2em] text-obsidian/60">
               Work email
