@@ -695,6 +695,22 @@ export default function AnalyzerApp() {
     return filteredThreads.filter((thread) => getPrimaryThreadProject(thread) === projectFilter);
   }, [filteredThreads, projectFilter]);
 
+  const knownProjects = useMemo(() => {
+    const set = new Set<string>();
+    for (const project of projects) {
+      if (project.trim()) set.add(project.trim());
+    }
+    for (const thread of threads) {
+      for (const project of getProjectsFromThread(thread)) {
+        if (project.trim()) set.add(project.trim());
+      }
+    }
+    if (threads.some((thread) => !thread.projectTag?.trim())) {
+      set.add("No Project");
+    }
+    return Array.from(set).sort((a, b) => a.localeCompare(b));
+  }, [threads, projects]);
+
   const groupedThreads = useMemo(() => {
     const groups = new Map<string, ChatThread[]>();
     for (const project of knownProjects) {
@@ -714,22 +730,6 @@ export default function AnalyzerApp() {
       return a[0].localeCompare(b[0]);
     });
   }, [projectFilteredThreads, knownProjects]);
-
-  const knownProjects = useMemo(() => {
-    const set = new Set<string>();
-    for (const project of projects) {
-      if (project.trim()) set.add(project.trim());
-    }
-    for (const thread of threads) {
-      for (const project of getProjectsFromThread(thread)) {
-        if (project.trim()) set.add(project.trim());
-      }
-    }
-    if (threads.some((thread) => !thread.projectTag?.trim())) {
-      set.add("No Project");
-    }
-    return Array.from(set).sort((a, b) => a.localeCompare(b));
-  }, [threads, projects]);
 
   const closeOverlays = () => {
     setIsMobileHistoryOpen(false);
