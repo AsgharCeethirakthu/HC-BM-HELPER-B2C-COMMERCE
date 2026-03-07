@@ -505,8 +505,10 @@ body {
 }
 
 .chat-panel {
-  display: grid;
-  grid-template-rows: auto minmax(0, 1fr) auto;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  height: 100%;
 }
 
 .fsd-preview-wrap {
@@ -592,11 +594,18 @@ body {
 .chat-transcript {
   overflow: auto;
   padding: 0.85rem 10rem;
+  flex: 1 1 auto;
+  min-height: 0;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(37, 99, 235, 0.45) rgba(15, 23, 42, 0.08);
+}
+
+.chat-transcript-stack {
   display: grid;
   gap: 0.7rem;
   align-items: start;
-  scrollbar-width: thin;
-  scrollbar-color: rgba(37, 99, 235, 0.45) rgba(15, 23, 42, 0.08);
+  align-content: end;
+  min-height: 100%;
 }
 
 .chat-transcript-empty {
@@ -707,10 +716,6 @@ body {
   inset: 0;
   background: linear-gradient(110deg, rgba(37, 99, 235, 0.06), rgba(20, 184, 166, 0.03));
   pointer-events: none;
-}
-
-.guided-option.selected > span:first-child {
-  font-weight: 700;
 }
 
 .guided-badge {
@@ -970,12 +975,12 @@ body {
 
 .clarification-structured {
   display: grid;
-  gap: 0.42rem;
+  gap: 0.55rem;
   max-width: 74ch;
 }
 
 .clarification-kicker {
-  @apply inline-flex w-fit rounded-full border border-signal/25 bg-signal/10 px-2 py-0.5 text-[0.58rem] font-semibold uppercase tracking-[0.08em] text-signal;
+  @apply inline-flex w-fit rounded-full border border-signal/30 bg-signal/15 px-2 py-0.5 text-[0.62rem] font-semibold uppercase tracking-[0.08em] text-signal;
 }
 
 .clarification-qa-list {
@@ -984,13 +989,13 @@ body {
 }
 
 .clarification-qa-item {
-  @apply rounded-xl border border-signal/20 bg-white/75 px-2.5 py-1.5;
+  @apply rounded-xl border border-signal/25 bg-white/90 px-3 py-2;
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.9);
 }
 
 .clarification-q,
 .clarification-a {
-  @apply text-[0.83rem] text-obsidian/85;
+  @apply text-[0.84rem] text-obsidian/85;
 }
 
 .clarification-q {
@@ -999,15 +1004,15 @@ body {
 }
 
 .clarification-a {
-  margin-top: 0.22rem;
-  padding-top: 0.2rem;
-  border-top: 1px dashed rgba(37, 99, 235, 0.16);
+  margin-top: 0.28rem;
+  padding-top: 0.24rem;
+  border-top: 1px dashed rgba(37, 99, 235, 0.2);
   line-height: 1.35;
   color: rgba(11, 18, 32, 0.8);
 }
 
 .clarification-label {
-  @apply mr-1 inline-flex rounded-full border border-signal/25 bg-signal/10 px-1.5 py-0.5 text-[0.62rem] font-semibold uppercase tracking-[0.08em] text-signal;
+  @apply mr-1 inline-flex rounded-full border border-signal/30 bg-signal/15 px-1.5 py-0.5 text-[0.62rem] font-semibold uppercase tracking-[0.08em] text-signal;
 }
 
 .clarification-a .clarification-label {
@@ -1017,7 +1022,7 @@ body {
 }
 
 .clarification-summary {
-  @apply rounded-xl border border-slate/30 bg-white/70 px-2.5 py-1.5;
+  @apply rounded-xl border border-slate/30 bg-white/90 px-3 py-2;
 }
 
 .clarification-summary-label {
@@ -1321,7 +1326,9 @@ body {
 }
 
 .chat-composer-wrap {
-  @apply border-t border-obsidian/10 p-3;
+  @apply border-t border-obsidian/10 py-3;
+  padding-left: 10rem;
+  padding-right: 10rem;
   background: linear-gradient(180deg, rgba(255, 255, 255, 0.92) 0%, rgba(245, 247, 255, 0.96) 100%);
   border-bottom-left-radius: 1.5rem;
   border-bottom-right-radius: 1.5rem;

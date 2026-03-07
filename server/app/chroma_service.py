@@ -4,6 +4,7 @@ import hashlib
 import logging
 import re
 from dataclasses import dataclass
+from typing import Any
 
 import chromadb
 from chromadb.config import Settings as ChromaSettings
@@ -134,17 +135,20 @@ class ChromaService:
             raise
         return len(records)
 
-    def query(self, query_text: str, top_k: int) -> dict:
+    def query(self, query_text: str, top_k: int, where_filter: dict[str, Any] | None = None) -> dict:
         query_embedding = embed_texts([query_text], task_type="retrieval_query")[0]
         n_results = top_k
         if settings.rerank_enabled:
             n_results = max(top_k, settings.rerank_candidates)
+        query_kwargs: dict[str, Any] = {
+            "query_embeddings": [query_embedding],
+            "n_results": n_results,
+            "include": ["documents", "metadatas", "distances"],
+        }
+        if where_filter:
+            query_kwargs["where"] = where_filter
         try:
-            response = self.collection.query(
-                query_embeddings=[query_embedding],
-                n_results=n_results,
-                include=["documents", "metadatas", "distances"],
-            )
+            response = self.collection.query(**query_kwargs)
         except Exception as exc:
             if "InvalidDimensionException" in exc.__class__.__name__:
                 _log_dimension_mismatch(exc)

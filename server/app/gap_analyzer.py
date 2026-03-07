@@ -351,9 +351,17 @@ def _apply_project_first_flow(
     return adjusted_classification, implementation_mode, coverage_status, project_status, gaps, rationale
 
 
-def _retrieve_chunks(chroma: ChromaService, query_text: str, top_k: int) -> tuple[list[dict], float]:
+def _retrieve_chunks(
+    chroma: ChromaService,
+    query_text: str,
+    top_k: int,
+    source_filters: Optional[list[str]] = None,
+) -> tuple[list[dict], float]:
     retrieval_query = expand_requirement_query(query_text)
-    response = chroma.query(retrieval_query, top_k)
+    where_filter = None
+    if source_filters:
+        where_filter = {"source": {"$in": source_filters}}
+    response = chroma.query(retrieval_query, top_k, where_filter=where_filter)
     documents = response["documents"][0]
     metadatas = response["metadatas"][0]
     distances = response["distances"][0]
@@ -399,6 +407,38 @@ def _retrieve_chunks(chroma: ChromaService, query_text: str, top_k: int) -> tupl
     chunks.sort(key=lambda item: item.get("score", 0.0), reverse=True)
     chunks = chunks[: max(top_k, 10)]
     return chunks, top_score
+
+
+def _retrieve_two_pass(chroma: ChromaService, query_text: str, top_k: int) -> tuple[list[dict], float]:
+    # Pass 1: project-first retrieval from Confluence/FSD space.
+    project_chunks, project_top = _retrieve_chunks(
+        chroma,
+        query_text,
+        top_k,
+        source_filters=["confluence"],
+    )
+    reliable_project_match, _ = _project_reliability_gate(query_text, project_chunks)
+    project_status = _detect_project_match_status(query_text, reliable_project_match, project_chunks)
+
+    # Pass 2: baseline retrieval for missing/uncertain scope.
+    baseline_chunks: list[dict] = []
+    baseline_top = 0.0
+    should_run_baseline = (not reliable_project_match) or project_status != "already_implemented"
+    if should_run_baseline:
+        baseline_chunks, baseline_top = _retrieve_chunks(
+            chroma,
+            query_text,
+            top_k,
+            source_filters=["baseline_web", "sfcc"],
+        )
+
+    merged = _merge_chunks(project_chunks, baseline_chunks, limit=max(top_k, 10))
+    top_score = max(project_top, baseline_top)
+    if merged:
+        return merged, top_score
+
+    # Fallback: mixed retrieval if source-scoped filters returned nothing.
+    return _retrieve_chunks(chroma, query_text, top_k)
 
 
 def _merge_chunks(existing: list[dict], incoming: list[dict], limit: int) -> list[dict]:
@@ -538,7 +578,7 @@ def _generate_clarifying_questions(requirement: str, context: str) -> Optional[l
 
 
 def analyze_requirement(chroma: ChromaService, requirement: str, top_k: int) -> GapResult:
-    top_chunks, top_score = _retrieve_chunks(chroma, requirement, top_k)
+    top_chunks, top_score = _retrieve_two_pass(chroma, requirement, top_k)
 
     classification = _classify_from_score(top_score)
     similarity_confidence = top_score
@@ -655,7 +695,7 @@ def analyze_requirement_agentic(
     """
     try:
         max_steps = max(1, min(max_steps, 6))
-        retrieved_chunks, top_score = _retrieve_chunks(chroma, requirement, top_k)
+        retrieved_chunks, top_score = _retrieve_two_pass(chroma, requirement, top_k)
         if not retrieved_chunks:
             return analyze_requirement(chroma, requirement, top_k)
 
@@ -716,7 +756,7 @@ def analyze_requirement_agentic(
                 if normalized in explored_queries:
                     break
                 explored_queries.add(normalized)
-                new_chunks, new_top = _retrieve_chunks(chroma, next_query, top_k)
+                new_chunks, new_top = _retrieve_two_pass(chroma, next_query, top_k)
                 top_score = max(top_score, new_top)
                 working_chunks = _merge_chunks(working_chunks, new_chunks, limit=max(top_k, 10))
                 continue

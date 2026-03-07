@@ -62,6 +62,11 @@ type ChatMessage = {
     classification: string;
     why: string;
     confidence: number;
+    implementationMode?: string | null;
+    coverageStatus?: string | null;
+    projectMatchStatus?: string | null;
+    gaps?: string[] | null;
+    sfraBaselineReference?: { sentence: string; url?: string; title?: string } | null;
     references: Array<{ title: string; url?: string; source?: string; sourceId?: string; score?: number }>;
   };
   attachments?: AttachmentMeta[];
@@ -228,32 +233,50 @@ const buildConsolidatedRequirementText = (baseRequirement: string, answers: Guid
 };
 
 const parseConsolidatedClarifications = (text: string) => {
-  const lines = text.split("\n").map((line) => line.trim());
-  const pairs: Array<{ question: string; answer: string }> = [];
+  const sourceText = text.replace(/\r/g, "").trim();
+  if (!sourceText) return null;
+
+  const normalized = sourceText.replace(/\n+/g, " ").replace(/\s+/g, " ").trim();
+  const summaryCutoff = normalized.search(/final\s+context\s+summary\s*:/i);
+  const qaScope = (summaryCutoff >= 0 ? normalized.slice(0, summaryCutoff) : normalized).trim();
+
+  const qaByIndex = new Map<string, { question?: string; answer?: string }>();
+  const tokenRegex = /(?:^|\s)(Q|A)\s*(\d+)\s*:\s*/gi;
+  const matches = Array.from(qaScope.matchAll(tokenRegex));
+
+  for (let i = 0; i < matches.length; i += 1) {
+    const match = matches[i];
+    const kind = (match[1] || "").toUpperCase();
+    const idx = match[2] || "";
+    const start = (match.index || 0) + match[0].length;
+    const end = i + 1 < matches.length ? matches[i + 1].index || qaScope.length : qaScope.length;
+    const content = qaScope.slice(start, end).trim();
+    if (!kind || !idx || !content) continue;
+    const current = qaByIndex.get(idx) || {};
+    if (kind === "Q") current.question = content;
+    else current.answer = content;
+    qaByIndex.set(idx, current);
+  }
+
+  const pairs = Array.from(qaByIndex.entries())
+    .sort((a, b) => Number(a[0]) - Number(b[0]))
+    .map(([, qa]) => ({
+      question: qa.question?.trim() || "",
+      answer: qa.answer?.trim() || "",
+    }))
+    .filter((entry) => entry.question || entry.answer);
+
   let summary = "";
   let summaryPoints: string[] = [];
-  for (let i = 0; i < lines.length; i += 1) {
-    const current = lines[i];
-    const qMatch = current.match(/^Q\d+:\s*(.+)$/i);
-    if (qMatch) {
-      const next = lines[i + 1] || "";
-      const aMatch = next.match(/^A\d+:\s*(.+)$/i);
-      pairs.push({
-        question: qMatch[1].trim(),
-        answer: aMatch ? aMatch[1].trim() : "",
-      });
-      if (aMatch) i += 1;
-      continue;
-    }
-    const summaryMatch = current.match(/^Final context summary:\s*(.+)$/i);
-    if (summaryMatch) {
-      summary = summaryMatch[1].trim();
-      summaryPoints = summary
-        .split(/(?:\s*;\s*|\s+\|\s+|(?<=[.!?])\s+)/)
-        .map((part) => part.trim())
-        .filter(Boolean);
-    }
+  const summaryMatch = normalized.match(/final\s+context\s+summary\s*:\s*([\s\S]+)$/i);
+  if (summaryMatch) {
+    summary = summaryMatch[1].trim();
+    summaryPoints = summary
+      .split(/(?:\s*;\s*|\s+\|\s+|(?<=[.!?])\s+)/)
+      .map((part) => part.trim())
+      .filter(Boolean);
   }
+
   if (!pairs.length && !summary) return null;
   return { pairs, summary, summaryPoints };
 };
@@ -306,30 +329,90 @@ const classificationBadgeLabel = (classification: string, confidence: number) =>
   return `${classification} (${percent}%)`;
 };
 
-const looksLikeSfraReference = (source: {
-  title: string;
-  url?: string;
-  source?: string;
-  sourceId?: string;
-}) => {
-  const token = `${source.title} ${source.url || ""} ${source.source || ""} ${source.sourceId || ""}`.toLowerCase();
-  return (
-    token.includes("sfra") ||
-    token.includes("salesforce") ||
-    token.includes("b2c-commerce") ||
-    token.includes("commerce-cloud") ||
-    token.includes("baseline_web")
-  );
+const prettyFlowValue = (value?: string | null) => {
+  if (!value) return "Not available";
+  return value
+    .split("_")
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ");
 };
 
-const getReasoningReferences = (
-  sources: Array<{ title: string; url?: string; source?: string; sourceId?: string; score?: number }>
-) => {
-  const sfraReference = sources.find((source) => looksLikeSfraReference(source));
-  const projectReference = sources.find(
-    (source) => source !== sfraReference && (source.source === "confluence" || source.sourceId?.includes("FSD"))
-  ) || sources.find((source) => source !== sfraReference);
-  return { sfraReference, projectReference };
+const tokenizeText = (value: string) =>
+  value
+    .toLowerCase()
+    .split(/[^a-z0-9]+/)
+    .filter((token) => token.length > 2);
+
+const lexicalOverlap = (a: string, b: string) => {
+  const aTokens = new Set(tokenizeText(a));
+  const bTokens = new Set(tokenizeText(b));
+  if (!aTokens.size || !bTokens.size) return 0;
+  let intersection = 0;
+  aTokens.forEach((token) => {
+    if (bTokens.has(token)) intersection += 1;
+  });
+  const union = new Set([...aTokens, ...bTokens]).size;
+  return union ? intersection / union : 0;
+};
+
+const bestMatchingSentence = (requirement: string, text: string) => {
+  const candidates = text
+    .split(/[\n\r]+|(?<=[.!?])\s+/)
+    .map((line) => line.trim())
+    .filter((line) => line.length > 20);
+  if (!candidates.length) return "";
+  let best = candidates[0];
+  let bestScore = lexicalOverlap(requirement, best);
+  for (const candidate of candidates.slice(1)) {
+    const score = lexicalOverlap(requirement, candidate);
+    if (score > bestScore) {
+      best = candidate;
+      bestScore = score;
+    }
+  }
+  return best.slice(0, 320);
+};
+
+const getSfraBaselineReference = (item?: GapResult) => {
+  if (!item) return null;
+  const requirement = item.requirement || "";
+  let best:
+    | {
+        text: string;
+        url?: string;
+        title?: string;
+        score: number;
+      }
+    | undefined;
+
+  for (const chunk of item.top_chunks || []) {
+    const meta = chunk.metadata || {};
+    const source = typeof meta.source === "string" ? meta.source.toLowerCase() : "";
+    const sourceId = typeof meta.source_id === "string" ? meta.source_id.toLowerCase() : "";
+    const url = typeof meta.url === "string" ? meta.url : "";
+    const isBaseline =
+      source === "baseline_web" ||
+      source === "sfcc" ||
+      sourceId.includes("developer.salesforce.com/docs/commerce/sfra") ||
+      url.toLowerCase().includes("developer.salesforce.com/docs/commerce/sfra");
+    if (!isBaseline) continue;
+    const text = typeof chunk.text === "string" ? chunk.text : "";
+    const overlap = lexicalOverlap(requirement, text);
+    const score = overlap + (typeof chunk.score === "number" ? chunk.score * 0.2 : 0);
+    if (!best || score > best.score) {
+      best = {
+        text,
+        url: url || undefined,
+        title: typeof meta.title === "string" ? meta.title : undefined,
+        score,
+      };
+    }
+  }
+
+  if (!best) return null;
+  const sentence = bestMatchingSentence(requirement, best.text) || best.text.slice(0, 320);
+  if (!sentence.trim()) return null;
+  return { sentence: sentence.trim(), url: best.url, title: best.title };
 };
 
 const statusCounts = (results: GapResult[]) => {
@@ -1200,19 +1283,27 @@ export default function AnalyzerApp() {
       const payload = await analyzeSingleRequirement(consolidated);
       const primary = payload.results[0];
       const references = primary ? getSources(primary).slice(0, 3) : [];
+      const sfraBaselineReference = primary ? getSfraBaselineReference(primary) : null;
       const detailedMessage: ChatMessage = {
         id: crypto.randomUUID(),
         role: "assistant",
         kind: "analysis_result",
         cycleId: activeGuidedCycle.id,
         createdAt: new Date().toISOString(),
-        text: primary ? `Analysis completed: ${primary.classification}.` : "Analysis completed.",
+        text: primary
+          ? `Analysis completed: ${primary.rationale || primary.classification}.`
+          : "Analysis completed.",
         analysisResults: payload.results,
         detailedResult: primary
           ? {
               classification: primary.classification,
               why: primary.rationale,
               confidence: primary.confidence,
+              implementationMode: primary.implementation_mode ?? null,
+              coverageStatus: primary.coverage_status ?? null,
+              projectMatchStatus: primary.project_match_status ?? null,
+              gaps: primary.gaps ?? null,
+              sfraBaselineReference,
               references,
             }
           : undefined,
@@ -2023,6 +2114,7 @@ export default function AnalyzerApp() {
               </div>
 
               <div className={`chat-transcript ${isDiscussionIdle ? "chat-transcript-empty" : ""}`} ref={chatScrollRef}>
+                <div className="chat-transcript-stack">
                 {isDiscussionIdle && (
                   <div className="chat-empty-guide">
                     <div className="chat-empty-head">
@@ -2068,6 +2160,10 @@ export default function AnalyzerApp() {
                 )}
                 {activeThread?.messages.map((message, index) => {
                   const followUpReply = message.role === "user" ? parseFollowUpReplyText(message.text) : null;
+                  const parsedClarifications =
+                    message.role === "user" && /clarifications\s*:/i.test(message.text)
+                      ? parseConsolidatedClarifications(message.text)
+                      : null;
                   if (followUpReply) {
                     return (
                       <div key={message.id} className="followup-message-stack">
@@ -2096,16 +2192,12 @@ export default function AnalyzerApp() {
                           ? "chat-bubble-intro"
                           : ""
                       } ${
-                        isDiscussionIdle && message.role === "assistant" && index === 0
+                        message.role === "assistant" && index === 0
                           ? "chat-bubble-onboarding"
                           : ""
                       }`}
                     >
                       {(() => {
-                        const parsedClarifications =
-                          message.role === "user" && message.kind === "guided_answer"
-                            ? parseConsolidatedClarifications(message.text)
-                            : null;
                         return (
                           <>
                       <div className="chat-meta">
@@ -2121,24 +2213,28 @@ export default function AnalyzerApp() {
                       </div>
                       {parsedClarifications ? (
                         <div className="clarification-structured">
-                          <p className="clarification-kicker">Clarifications captured</p>
-                          {parsedClarifications.pairs.length > 0 && (
-                            <div className="clarification-qa-list">
-                              {parsedClarifications.pairs.map((pair, idx) => (
-                                <div key={`${message.id}-qa-${idx}`} className="clarification-qa-item">
+                          <span className="clarification-kicker">Clarifications Captured</span>
+                          <div className="clarification-qa-list">
+                            {parsedClarifications.pairs.map((entry, idx) => (
+                              <div key={`${message.id}-clar-${idx}`} className="clarification-qa-item">
+                                {entry.question ? (
                                   <p className="clarification-q">
-                                    <span className="clarification-label">Q{idx + 1}</span> {pair.question}
+                                    <span className="clarification-label">{`Q${idx + 1}`}</span>
+                                    {entry.question}
                                   </p>
+                                ) : null}
+                                {entry.answer ? (
                                   <p className="clarification-a">
-                                    <span className="clarification-label">A{idx + 1}</span> {pair.answer || "Not provided"}
+                                    <span className="clarification-label">{`A${idx + 1}`}</span>
+                                    {entry.answer}
                                   </p>
-                                </div>
-                              ))}
-                            </div>
-                          )}
-                          {parsedClarifications.summary && (
+                                ) : null}
+                              </div>
+                            ))}
+                          </div>
+                          {parsedClarifications.summary ? (
                             <div className="clarification-summary">
-                              <p className="clarification-summary-label">Final context summary</p>
+                              <p className="clarification-summary-label">Final Context Summary</p>
                               {parsedClarifications.summaryPoints.length > 1 ? (
                                 <ul className="clarification-summary-list">
                                   {parsedClarifications.summaryPoints.map((point, idx) => (
@@ -2149,7 +2245,7 @@ export default function AnalyzerApp() {
                                 <p className="clarification-summary-text">{parsedClarifications.summary}</p>
                               )}
                             </div>
-                          )}
+                          ) : null}
                         </div>
                       ) : (
                         <p className="chat-text">{message.text}</p>
@@ -2171,7 +2267,6 @@ export default function AnalyzerApp() {
                       {message.detailedResult ? (
                         <div className="analysis-detailed-card">
                           {(() => {
-                            const reasoningReferences = getReasoningReferences(message.detailedResult.references);
                             return (
                               <>
                           <div className="analysis-item-header">
@@ -2186,57 +2281,37 @@ export default function AnalyzerApp() {
                             </span>
                           </div>
                           <div className="analysis-response-box">
-                            <p className="analysis-response-label">Why this classification</p>
-                            <p className="mt-1 text-sm font-medium leading-relaxed text-obsidian/88">
-                              {message.detailedResult.why}
-                            </p>
-                            <ul className="analysis-reasoning-list">
+                            <ul className="mt-1 space-y-1 text-[0.78rem] text-obsidian/80">
                               <li>
-                                SFRA baseline evidence:{" "}
-                                {reasoningReferences.sfraReference ? (
-                                  reasoningReferences.sfraReference.url ? (
-                                    <a
-                                      href={reasoningReferences.sfraReference.url}
-                                      target="_blank"
-                                      rel="noreferrer"
-                                      className="analysis-inline-link"
-                                    >
-                                      {reasoningReferences.sfraReference.title}
-                                    </a>
-                                  ) : (
-                                    <span className="analysis-inline-fallback">
-                                      {reasoningReferences.sfraReference.title}
-                                      {reasoningReferences.sfraReference.source
-                                        ? ` (${reasoningReferences.sfraReference.source})`
-                                        : ""}
-                                    </span>
-                                  )
-                                ) : (
-                                  "No direct SFRA baseline link returned in this run."
-                                )}
+                                <span className="font-semibold">Implementation mode:</span>{" "}
+                                {prettyFlowValue(message.detailedResult.implementationMode)}
                               </li>
                               <li>
-                                Project documentation evidence:{" "}
-                                {reasoningReferences.projectReference ? (
-                                  reasoningReferences.projectReference.url ? (
-                                    <a
-                                      href={reasoningReferences.projectReference.url}
-                                      target="_blank"
-                                      rel="noreferrer"
-                                      className="analysis-inline-link"
-                                    >
-                                      {reasoningReferences.projectReference.title}
-                                    </a>
-                                  ) : (
-                                    <span className="analysis-inline-fallback">
-                                      {reasoningReferences.projectReference.title}
-                                      {reasoningReferences.projectReference.source
-                                        ? ` (${reasoningReferences.projectReference.source})`
-                                        : ""}
-                                    </span>
-                                  )
+                                <span className="font-semibold">Coverage status:</span>{" "}
+                                {prettyFlowValue(message.detailedResult.coverageStatus)}
+                              </li>
+                              <li>
+                                <span className="font-semibold">Project match status:</span>{" "}
+                                {prettyFlowValue(message.detailedResult.projectMatchStatus)}
+                              </li>
+                              <li>
+                                <span className="font-semibold">SFRA baseline reference:</span>{" "}
+                                {message.detailedResult.sfraBaselineReference ? (
+                                  <>
+                                    {message.detailedResult.sfraBaselineReference.sentence}{" "}
+                                    {message.detailedResult.sfraBaselineReference.url ? (
+                                      <a
+                                        href={message.detailedResult.sfraBaselineReference.url}
+                                        target="_blank"
+                                        rel="noreferrer"
+                                        className="analysis-inline-link"
+                                      >
+                                        (source)
+                                      </a>
+                                    ) : null}
+                                  </>
                                 ) : (
-                                  "No project FSD reference link returned in this run."
+                                  "No direct SFRA baseline sentence match returned in this run."
                                 )}
                               </li>
                             </ul>
@@ -2369,6 +2444,7 @@ export default function AnalyzerApp() {
                     </div>
                   </article>
                 )}
+                </div>
               </div>
 
               <div
@@ -3111,7 +3187,14 @@ export default function AnalyzerApp() {
         >
           <div className="workspace-modal onboarding-modal">
             <div className="workspace-modal-header">
-              <h3 className="font-display text-2xl text-obsidian">Welcome to Scout!</h3>
+              <h3 className="font-display text-2xl text-obsidian">
+                <span className="inline-flex items-center gap-2">
+                  <svg viewBox="0 0 24 24" aria-hidden="true" className="h-5 w-5 text-signal" fill="none" stroke="currentColor" strokeWidth="2">
+                    <path d="M12 3l2.2 4.6L19 9l-3.5 3.4.8 4.8-4.3-2.3-4.3 2.3.8-4.8L5 9l4.8-1.4L12 3Z" />
+                  </svg>
+                  <span>Welcome to Scout!</span>
+                </span>
+              </h3>
             </div>
             <div className="workspace-modal-body">
               <p className="text-sm leading-6 text-obsidian/75">
@@ -3131,10 +3214,14 @@ export default function AnalyzerApp() {
             </div>
             <div className="workspace-modal-actions">
               <button
-                className="rounded-full bg-obsidian px-5 py-2 text-sm font-semibold text-white"
+                className="inline-flex items-center gap-2 rounded-full bg-steel px-5 py-2 text-sm font-semibold text-white"
                 onClick={() => setIsOnboardingOpen(false)}
               >
-                Start Brainstorming
+                <svg viewBox="0 0 24 24" aria-hidden="true" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2">
+                  <path d="M12 3v6m0 0 3-3m-3 3-3-3" />
+                  <path d="M5 13.5a7 7 0 1 0 14 0" />
+                </svg>
+                <span>Start Brainstorming</span>
               </button>
             </div>
           </div>
