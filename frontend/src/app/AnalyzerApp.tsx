@@ -2527,43 +2527,40 @@ export default function AnalyzerApp() {
                 {isDiscussionIdle && (
                   <div className="chat-empty-guide">
                     <div className="chat-empty-head">
-                      <div className="chat-empty-kicker-row">
-                        <span className="chat-empty-idea-icon" aria-hidden="true">
-                          <svg
-                            viewBox="0 0 24 24"
-                            className="h-3.5 w-3.5"
-                            fill="none"
-                            stroke="currentColor"
-                            strokeWidth="1.9"
-                            strokeLinecap="round"
-                            strokeLinejoin="round"
-                          >
-                            <path d="M8.2 10a3.8 3.8 0 1 1 7.6 0c0 1.4-.7 2.4-1.6 3.3-.6.6-1 1.2-1.1 2h-2.2c-.1-.8-.5-1.4-1.1-2C8.9 12.4 8.2 11.4 8.2 10Z" />
-                            <path d="M9.8 18.1h4.4M10.5 20h3" />
-                          </svg>
-                        </span>
-                        <p className="chat-empty-kicker">Start with a clear requirement</p>
+                      <div className="chat-empty-intro-row">
+                        <div className="chat-empty-left">
+                          <img
+                            src="/mascot/scout-brand-mascot-web2-transparent.png"
+                            alt="Scout mascot"
+                            className="chat-empty-mascot"
+                          />
+                        </div>
+                        <div className="chat-empty-intro-copy">
+                          <div className="chat-empty-kicker-row">
+                            <p className="chat-empty-kicker">Start with a clear requirement</p>
+                          </div>
+                          <h3 className="chat-empty-title">Turn initial ideas into FSD-ready analysis</h3>
+                          <p className="chat-empty-copy">
+                            Share one concrete requirement with behavior, scope, and constraints or pick a sample to
+                            experience the flow.
+                          </p>
+                          <div className="chat-empty-starters">
+                            {STARTER_PROMPTS.map((prompt, idx) => (
+                              <button
+                                key={`starter-${idx}`}
+                                className="chat-starter-chip"
+                                onClick={() => {
+                                  setComposer(prompt);
+                                  setError("");
+                                  window.setTimeout(() => composerRef.current?.focus(), 0);
+                                }}
+                              >
+                                {prompt}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
                       </div>
-                      <h3 className="chat-empty-title">Turn initial ideas into FSD-ready analysis</h3>
-                      <p className="chat-empty-copy">
-                        Share one concrete requirement with behavior, scope, and constraints to get higher quality
-                        classification and rationale.
-                      </p>
-                    </div>
-                    <div className="chat-empty-starters">
-                      {STARTER_PROMPTS.map((prompt, idx) => (
-                        <button
-                          key={`starter-${idx}`}
-                          className="chat-starter-chip"
-                          onClick={() => {
-                            setComposer(prompt);
-                            setError("");
-                            window.setTimeout(() => composerRef.current?.focus(), 0);
-                          }}
-                        >
-                          {prompt}
-                        </button>
-                      ))}
                     </div>
                   </div>
                 )}
