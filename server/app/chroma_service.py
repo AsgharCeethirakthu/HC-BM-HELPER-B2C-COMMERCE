@@ -194,3 +194,23 @@ class ChromaService:
 
     def delete_source(self, source: str, source_id: str) -> None:
         self.collection.delete(where={"$and": [{"source": source}, {"source_id": source_id}]})
+
+    def list_source_ids(self, source: str, space_keys: set[str] | None = None) -> set[str]:
+        results = self.collection.get(where={"source": source}, include=["metadatas"])
+        if not results or not results.get("metadatas"):
+            return set()
+
+        normalized_spaces = {space.strip() for space in (space_keys or set()) if space.strip()}
+        source_ids: set[str] = set()
+        for metadata in results["metadatas"]:
+            if not metadata:
+                continue
+            source_id = str(metadata.get("source_id") or "").strip()
+            if not source_id:
+                continue
+            if normalized_spaces:
+                space_key = str(metadata.get("space_key") or "").strip()
+                if space_key not in normalized_spaces:
+                    continue
+            source_ids.add(source_id)
+        return source_ids

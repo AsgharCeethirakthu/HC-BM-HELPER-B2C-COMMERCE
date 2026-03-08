@@ -324,10 +324,27 @@ def _run_confluence_ingest(progress_cb=None) -> dict:
 
     page_ids = search_pages(space_keys, settings.confluence_cql_extra.strip())
     total_pages = len(page_ids)
+    existing_page_ids = chroma.list_source_ids("confluence", set(space_keys))
+    current_page_ids = set(page_ids)
+    deleted_page_ids = sorted(existing_page_ids - current_page_ids)
+
+    if deleted_page_ids:
+        if progress_cb:
+            progress_cb(
+                stage=f"Removing {len(deleted_page_ids)} deleted Confluence pages...",
+                progress=7,
+            )
+        for stale_page_id in deleted_page_ids:
+            chroma.delete_source("confluence", stale_page_id)
+
     if not page_ids:
         if progress_cb:
             progress_cb(
-                stage="No pages found for configured Confluence spaces.",
+                stage=(
+                    "No pages found for configured Confluence spaces."
+                    if not deleted_page_ids
+                    else f"Removed {len(deleted_page_ids)} deleted pages. No pages found for current ingest scope."
+                ),
                 progress=100,
                 pages_total=0,
                 pages_processed=0,
@@ -335,7 +352,7 @@ def _run_confluence_ingest(progress_cb=None) -> dict:
                 pages_skipped=0,
                 chunks=0,
             )
-        return {"pages": 0, "chunks": 0, "indexed": 0, "skipped": 0}
+        return {"pages": 0, "chunks": 0, "indexed": 0, "skipped": 0, "deleted": len(deleted_page_ids)}
 
     total_chunks = 0
     indexed_pages = 0
@@ -380,7 +397,13 @@ def _run_confluence_ingest(progress_cb=None) -> dict:
             pages_skipped=skipped_pages,
             chunks=total_chunks,
         )
-    return {"pages": total_pages, "chunks": total_chunks, "indexed": indexed_pages, "skipped": skipped_pages}
+    return {
+        "pages": total_pages,
+        "chunks": total_chunks,
+        "indexed": indexed_pages,
+        "skipped": skipped_pages,
+        "deleted": len(deleted_page_ids),
+    }
 
 
 def _normalize_web_url(url: str) -> str | None:

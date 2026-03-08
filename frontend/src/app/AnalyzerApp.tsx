@@ -123,33 +123,7 @@ const STARTER_PROMPTS = [
 const GUIDED_MAX_STEPS = 3;
 const DATA_SOURCE_STORAGE_KEY = "scout.dataSources.v1";
 const DEFAULT_PROJECT_NAME = "General";
-const DEFAULT_BASELINE_LINKS: DataSourceLink[] = [
-  {
-    id: crypto.randomUUID(),
-    url: "https://help.salesforce.com/s/articleView?id=cc.b2c_getting_started.htm&type=5",
-    note: "B2C Commerce overview, include TOC hierarchy for baseline understanding.",
-  },
-  {
-    id: crypto.randomUUID(),
-    url: "https://sfcclearning.com/infocenter/",
-    note: "Secondary context only; use for supporting examples.",
-  },
-  {
-    id: crypto.randomUUID(),
-    url: "https://developer.salesforce.com/docs/commerce/sfra/guide/sfra-feature-list.html",
-    note: "Primary SFRA feature coverage baseline.",
-  },
-  {
-    id: crypto.randomUUID(),
-    url: "https://help.salesforce.com/s/articleView?id=cc.b2c_merchandising_your_site.htm&type=5",
-    note: "Business Manager configuration baseline.",
-  },
-  {
-    id: crypto.randomUUID(),
-    url: "https://www.rhino-inquisitor.com/salesforce-b2c-commerce-cloud-documentation/",
-    note: "Supplementary overview only.",
-  },
-];
+const DEFAULT_BASELINE_LINKS: DataSourceLink[] = [];
 
 const FALLBACK_GUIDED_STEPS: FollowupStepResponse[] = [
   {
@@ -578,8 +552,6 @@ export default function AnalyzerApp() {
   const [baselineLinks, setBaselineLinks] = useState<DataSourceLink[]>(DEFAULT_BASELINE_LINKS);
   const [newBaselineUrl, setNewBaselineUrl] = useState("");
   const [newBaselineNote, setNewBaselineNote] = useState("");
-  const [projectConfluenceUrl, setProjectConfluenceUrl] = useState("");
-  const [projectSecurityToken, setProjectSecurityToken] = useState("");
   const [isIngestingDataSources, setIsIngestingDataSources] = useState(false);
   const [dataSourceError, setDataSourceError] = useState("");
   const [dataSourceNotice, setDataSourceNotice] = useState("");
@@ -868,7 +840,6 @@ export default function AnalyzerApp() {
       if (!raw) return;
       const parsed = JSON.parse(raw) as {
         baselineLinks?: DataSourceLink[];
-        projectConfluenceUrl?: string;
       };
       if (parsed.baselineLinks?.length) {
         setBaselineLinks(
@@ -879,9 +850,6 @@ export default function AnalyzerApp() {
           }))
         );
       }
-      if (typeof parsed.projectConfluenceUrl === "string") {
-        setProjectConfluenceUrl(parsed.projectConfluenceUrl);
-      }
     } catch {
       // Ignore storage parse errors and continue with defaults.
     }
@@ -890,10 +858,9 @@ export default function AnalyzerApp() {
   useEffect(() => {
     const payload = {
       baselineLinks,
-      projectConfluenceUrl,
     };
     localStorage.setItem(DATA_SOURCE_STORAGE_KEY, JSON.stringify(payload));
-  }, [baselineLinks, projectConfluenceUrl]);
+  }, [baselineLinks]);
 
   useEffect(() => {
     chatScrollRef.current?.scrollTo({ top: chatScrollRef.current.scrollHeight, behavior: "smooth" });
@@ -2010,9 +1977,6 @@ export default function AnalyzerApp() {
             </button>
             {isSettingsOpen && (
               <div className="workspace-menu" role="menu" aria-label="Settings menu">
-                <button className="workspace-menu-item" role="menuitem" onClick={() => setIsSettingsOpen(false)}>
-                  Theme tokens (locked)
-                </button>
                 <button
                   className="workspace-menu-item"
                   role="menuitem"
@@ -2023,9 +1987,6 @@ export default function AnalyzerApp() {
                   }}
                 >
                   Data Sources
-                </button>
-                <button className="workspace-menu-item" role="menuitem" onClick={() => setIsSettingsOpen(false)}>
-                  Notification preferences
                 </button>
               </div>
             )}
@@ -3533,37 +3494,6 @@ export default function AnalyzerApp() {
                 </div>
               </section>
 
-              <section className="datasource-section">
-                <div className="datasource-section-head">
-                  <p className="text-sm font-semibold text-obsidian/80">Project Documentation (Confluence)</p>
-                  <p className="text-xs text-obsidian/60">
-                    Configure project Confluence endpoint and token for ingestion workflows.
-                  </p>
-                </div>
-                <label className="workspace-field">
-                  Confluence URL
-                  <input
-                    value={projectConfluenceUrl}
-                    onChange={(event) => setProjectConfluenceUrl(event.target.value)}
-                    className="workspace-input"
-                    placeholder="https://your-company.atlassian.net/wiki"
-                  />
-                </label>
-                <label className="workspace-field">
-                  Security Token
-                  <input
-                    value={projectSecurityToken}
-                    onChange={(event) => setProjectSecurityToken(event.target.value)}
-                    className="workspace-input"
-                    type="password"
-                    placeholder="Enter token"
-                  />
-                </label>
-                <p className="text-[0.72rem] text-obsidian/58">
-                  Note: baseline links added above are ingested directly. Confluence ingestion currently uses server-side
-                  configuration; this URL/token is retained for managed source setup.
-                </p>
-              </section>
               {(isIngestingDataSources || ingestProgress > 0) && (
                 <section className="datasource-ingest-progress">
                   <div className="datasource-ingest-head">
